@@ -54,6 +54,7 @@ jobs:
 
       # Initialize serially before concurrent tests; bound retries for transient download failures.
       - name: Initialize Electron executable
+        id: init
         run: |
           node <<'NODE'
           const { spawnSync } = require('node:child_process');
@@ -86,17 +87,20 @@ jobs:
 
       # Native x64 test builds reuse the verified installed dist instead of downloading it again.
       - name: Package Windows x64 NSIS test installer
+        id: package_windows
         if: matrix.platform == 'windows'
         run: node node_modules/electron-builder/cli.js --win nsis --x64 --publish never -c.electronDist=node_modules/electron/dist
 
       # Test-only ad-hoc signing: never change the hardened production configuration.
       - name: Package macOS arm64 and x64 ad-hoc test DMGs
+        id: package_macos
         if: matrix.platform == 'macos'
         run: >-
           node node_modules/electron-builder/cli.js --mac dmg --arm64 --x64 --publish never
           -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false
 
       - name: Package Linux x64 AppImage test installer
+        id: package_linux
         if: matrix.platform == 'linux'
         run: node node_modules/electron-builder/cli.js --linux AppImage --x64 --publish never -c.electronDist=node_modules/electron/dist
 
@@ -113,3 +117,59 @@ jobs:
           include-hidden-files: false
           retention-days: 7
           compression-level: 0
+
+      # Native-host first-hop comparison only, not identification of a failed tool/checksum/Intel URL.
+      - name: Diagnose download transport without downloading archives
+        id: download_diagnostics
+        if: failure() && (steps.init.outcome == 'failure' || steps.package_windows.outcome == 'failure' || steps.package_macos.outcome == 'failure' || steps.package_linux.outcome == 'failure')
+        timeout-minutes: 2
+        run: |
+          node <<'NODE'
+          const { spawnSync } = require('node:child_process');
+          const emit = (client, data) => console.log(JSON.stringify({ client, ...data }));
+          const errorName = (error) => ['AbortError', 'TimeoutError', 'TypeError', 'SyntaxError'].includes(error?.name) ? error.name : 'Error';
+          (async () => {
+            const { version } = require('./node_modules/electron/package.json');
+            if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)
+                || !['win32', 'darwin', 'linux'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) {
+              emit('probe', { error: 'InvalidTarget' }); return;
+            }
+            const url = new URL(`https://github.com/electron/electron/releases/download/v${version}/electron-v${version}-${process.platform}-${process.arch}.zip`);
+            const agent = 'chat-apps-ci-network-probe/1.0';
+            const host = url.hostname;
+            const summary = (status, get) => {
+              let locationHost = null;
+              try { const location = get('location'); if (location) locationHost = new URL(location, url).hostname; } catch {}
+              const contentType = (get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+              const requestId = get('x-github-request-id') ?? '';
+              return { host, status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
+                locationHost: /^[a-z0-9.-]{1,253}$/i.test(locationHost ?? '') ? locationHost : null,
+                contentType: /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(contentType) ? contentType : null,
+                cache: (get('x-cache') ?? '').split(',').map(s => s.trim()).filter(s => ['HIT', 'MISS', 'BYPASS', 'STALE'].includes(s)),
+                requestId: /^[a-f0-9:]{1,96}$/i.test(requestId) ? requestId : null };
+            };
+            const proxyNames = ['http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'NODE_USE_ENV_PROXY'];
+            emit('environment', { host, proxyPresent: Object.fromEntries(proxyNames.map(name => [name, Boolean(process.env[name])])) });
+            try {
+              const response = await fetch(url, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(20000),
+                headers: { 'User-Agent': agent, Range: 'bytes=0-1023' } });
+              await response.body?.cancel();
+              emit('node', summary(response.status, name => response.headers.get(name)));
+            } catch (error) { emit('node', { host, error: errorName(error) }); }
+            try {
+              const result = spawnSync('curl', ['--disable', '--silent', '--request', 'GET', '--user-agent', agent,
+                '--range', '0-1023', '--max-time', '20', '--max-redirs', '0', '--max-filesize', '4096',
+                '--output', process.platform === 'win32' ? 'NUL' : '/dev/null',
+                '--write-out', '{"transfer":%{json},"headers":%{header_json}}', '--url', url.href],
+                { encoding: 'utf8', timeout: 20000, maxBuffer: 65536, stdio: ['ignore', 'pipe', 'ignore'] });
+              if (result.error) {
+                emit('curl', { host, error: result.error.code === 'ENOENT' ? 'Unavailable' : result.error.code === 'ETIMEDOUT' ? 'TimeoutError' : 'Error' }); return;
+              }
+              const { transfer, headers } = JSON.parse(result.stdout);
+              emit('curl', { ...summary(transfer.http_code, name => headers?.[name]?.[0]),
+                proxyUsed: [0, 1].includes(transfer.proxy_used) ? Boolean(transfer.proxy_used) : null,
+                httpVersion: ['1.0', '1.1', '2', '3'].includes(transfer.http_version) ? transfer.http_version : null,
+                ...(result.status === 0 ? {} : { error: 'RequestFailed' }) });
+            } catch (error) { emit('curl', { host, error: errorName(error) }); }
+          })().catch(() => emit('probe', { error: 'DiagnosticError' }));
+          NODE
