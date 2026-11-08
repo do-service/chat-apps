@@ -52,9 +52,25 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      # Electron 45 downloads lazily on require; initialize once before concurrent tests.
+      # Initialize serially before concurrent tests; bound retries for transient download failures.
       - name: Initialize Electron executable
-        run: node -e "const fs=require('node:fs'); if(!fs.existsSync(require('electron'))) throw new Error('Electron executable missing');"
+        run: |
+          node <<'NODE'
+          const { spawnSync } = require('node:child_process');
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            const result = spawnSync(process.execPath, ['node_modules/electron/install.js'], {
+              timeout: 300000,
+              stdio: 'inherit',
+            });
+            if (!result.error && result.status === 0) break;
+            if (attempt === 3) {
+              throw result.error ?? new Error(`Electron installation failed after 3 attempts: ${result.signal ?? result.status}`);
+            }
+            console.warn(`Electron initialization attempt ${attempt}/3 failed; retrying`);
+          }
+          const fs = require('node:fs');
+          if (!fs.existsSync(require('electron'))) throw new Error('Electron executable missing');
+          NODE
 
       - name: Typecheck
         run: npm run typecheck
@@ -68,9 +84,10 @@ jobs:
       - name: Build standalone desktop
         run: npm run build
 
+      # Native x64 test builds reuse the verified installed dist instead of downloading it again.
       - name: Package Windows x64 NSIS test installer
         if: matrix.platform == 'windows'
-        run: node node_modules/electron-builder/cli.js --win nsis --x64 --publish never
+        run: node node_modules/electron-builder/cli.js --win nsis --x64 --publish never -c.electronDist=node_modules/electron/dist
 
       # Test-only ad-hoc signing: never change the hardened production configuration.
       - name: Package macOS arm64 and x64 ad-hoc test DMGs
@@ -81,7 +98,7 @@ jobs:
 
       - name: Package Linux x64 AppImage test installer
         if: matrix.platform == 'linux'
-        run: node node_modules/electron-builder/cli.js --linux AppImage --x64 --publish never
+        run: node node_modules/electron-builder/cli.js --linux AppImage --x64 --publish never -c.electronDist=node_modules/electron/dist
 
       - name: Verify exact installers and generate SHA-256 manifest
         id: artifacts

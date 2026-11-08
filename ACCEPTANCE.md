@@ -54,7 +54,7 @@ npm audit
 | Unit/contract tests | Полный test summary и exit code, не только последняя строка | Локально 2026-11-08: PASS, 83/83, exit 0 после последовательной инициализации Electron |
 | Artifact helper tests | Полный `node --test scripts/artifacts.test.mjs` summary | Локально 2026-11-08: PASS, 14/14, exit 0; helper coverage 100% lines/branches/functions |
 | Normal build | Exit code; embedded target соответствует approved HTTPS origin | Локально 2026-11-08: PASS, exit 0; ASAR config содержит approved HTTPS origin |
-| Native package jobs | Run URL и точные files/checksums для каждой платформы | GitHub Actions: NOT RUN; локальный macOS arm64 unpacked package — см. ниже |
+| Native package jobs | Run URL и точные files/checksums для каждой платформы | Первый GitHub run: macOS PASS; Windows/Linux download HTTP 504, включая повтор failed jobs. Подробности ниже; это не installed acceptance |
 | Dependency audit | Актуальный отчёт, включая dev/build dependencies | См. известную оговорку ниже; не dependency-clean |
 
 В тестах проверяются contract/payload validation, security/config, notification service/store, lifecycle, auth и Electron adapters с тестовыми port/mock-границами. Это не установленное приложение и не live IdP. Проверки build config также не доказывают доступность remote сайта.
@@ -66,6 +66,17 @@ npm audit
 Локальная структурная упаковка macOS arm64 прошла с test-only ad-hoc overrides и `electronDist=node_modules/electron/dist`: повторная загрузка Electron packager-ом первоначально завершилась HTTP 504, поэтому использован уже установленный и проверенный Electron 45.2.3. `codesign --verify --deep --strict` завершился с exit 0. ASAR содержит только main/preload bundles, embedded config, три diagnostic-ресурса и package manifest; исходников backend/frontend, npm-зависимостей, ключей или профилей внутри ASAR нет. Это **не** DMG install, запуск приложения, Developer ID/notarization или OS notification acceptance.
 
 Опциональный [cookie smoke harness](<scripts/auth-cookie-smoke.cjs>) в этот прогон не запускался. Ему нужны отдельно генерируемые тестовые модули и loopback TLS fixtures; обычный build их не создаёт. Локальные ключи, сертификаты и профили не публикуются.
+
+### Первый GitHub Actions run
+
+[Run 42466532380](https://github.com/do-service/chat-apps/actions/runs/42466532380) для commit `3d4c7ed1ac8d7f627afd9e0cdce0932c023b944f`: macOS job прошёл tests/build/packaging и загрузил оба DMG. Lead отдельно скачал artifact `desktop-test-macos-42466532380-1` (ID `13611622638`), проверил точный набор из двух DMG и `SHA256SUMS.txt`, повторно вычислил hashes; оба образа прошли `hdiutil verify` без монтирования/запуска приложения:
+
+| DMG | SHA-256 |
+| --- | --- |
+| Apple Silicon | `03325225ce8e3db07b4d6ad60be27d4f29ec7cb2b33e8c37c6afdc8b9bd9646c` |
+| Intel | `cbc232156f4b0c3b184f86b6a9dd734310bd04f1c78858c7e711f4e4c9239ebd` |
+
+Windows остановился на загрузке native Electron с HTTP 504. Linux в первой попытке прошёл 83 desktop-теста, 14 helper-тестов и build, но повторный download-этап packager завершился HTTP 504; точный failing URL в этом логе отсутствует. Повтор только failed jobs также получил HTTP 504 при инициализации native Electron на Windows/Linux. Это **FAIL сетевых build prerequisites**, не PASS установщиков этих платформ. Installed matrix остаётся NOT RUN.
 
 ### Известная оговорка dependency audit
 

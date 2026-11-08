@@ -113,7 +113,7 @@ npm run package:dir       # распакованное приложение те
 | macOS Intel | `macos-15` (тот же packaging job) | DMG `x64` |
 | Linux x64 | `ubuntu-24.04` | AppImage |
 
-CI выполняет locked install, последовательную инициализацию Electron, typecheck, tests, artifact-helper tests, build и packaging. [Artifact helper](<scripts/artifacts.mjs>) проверяет точный allowlist и создаёт `SHA256SUMS.txt`; его команда — `node scripts/artifacts.mjs windows` (либо `macos`/`linux`) после platform packaging. Он отказывает при существующем checksum manifest, а не перезаписывает его.
+CI выполняет locked install, последовательную инициализацию Electron (до трёх попыток штатного installer с timeout; после неудачи job завершается ошибкой), typecheck, tests, artifact-helper tests, build и packaging. Native Windows/Linux x64 packaging использует уже установленный Electron dist без повторной сетевой загрузки; macOS dual-arch собирается отдельно. Reuse dist может сохранить штатные дополнительные ресурсы Electron, например `default_app.asar`; основной код приложения остаётся в `app.asar`. [Artifact helper](<scripts/artifacts.mjs>) проверяет точный allowlist и создаёт `SHA256SUMS.txt`; его команда — `node scripts/artifacts.mjs windows` (либо `macos`/`linux`) после platform packaging. Он отказывает при существующем checksum manifest, а не перезаписывает его.
 
 Проверка обеих macOS архитектур в packaging не заменяет запуск на обоих типах Mac. macOS CI использует **ad-hoc signing только для теста**, без Developer ID и notarization. CLI overrides `mac.identity=-`, `mac.hardenedRuntime=false`, `mac.notarize=false` относятся только к тестовому job; базовая конфигурация с `hardenedRuntime: true` не меняется. Это не обход Gatekeeper и не подтверждение допуска/показа уведомлений ОС.
 
