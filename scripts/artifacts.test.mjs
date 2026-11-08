@@ -6,16 +6,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { LinuxPackager, archFromString } from "app-builder-lib";
+import { getConfig } from "app-builder-lib/out/util/config/load.js";
 import { prepareArtifacts } from "./artifacts.mjs";
 
 const script = fileURLToPath(new URL("./artifacts.mjs", import.meta.url));
 const filenames = {
   windows: ["chat-desktop-spike-0.1.0-win-x64.exe"],
   macos: ["chat-desktop-spike-0.1.0-mac-arm64.dmg", "chat-desktop-spike-0.1.0-mac-x64.dmg"],
-  linux: ["chat-desktop-spike-0.1.0-linux-x64.AppImage"],
+  linux: ["chat-desktop-spike-0.1.0-linux-x86_64.AppImage"],
 };
 
-async function fixture(t, platform = "windows") {
+async function fixture(t, platform = "windows", names = filenames[platform]) {
   const root = await mkdtemp(path.join(tmpdir(), "desktop-artifacts-test-"));
   t.after(async () => {
     assert.equal(path.dirname(root), path.resolve(tmpdir()));
@@ -24,7 +26,7 @@ async function fixture(t, platform = "windows") {
   });
   await writeFile(path.join(root, "package.json"), JSON.stringify({ version: "0.1.0" }));
   await mkdir(path.join(root, "release"));
-  for (const name of filenames[platform]) await writeFile(path.join(root, "release", name), `installer:${name}\n`);
+  for (const name of names) await writeFile(path.join(root, "release", name), `installer:${name}\n`);
   return root;
 }
 
@@ -41,6 +43,19 @@ for (const platform of Object.keys(filenames)) {
     assert.equal(await readFile(path.join(root, "release/SHA256SUMS.txt"), "utf8"), lines.join(""));
   });
 }
+
+test("linux: allowlist matches installed electron-builder expansion of the real config", async (t) => {
+  const projectDir = fileURLToPath(new URL("../", import.meta.url));
+  const metadata = JSON.parse(await readFile(path.join(projectDir, "package.json"), "utf8"));
+  const { result: config } = await getConfig({ projectDir }, "electron-builder.yml");
+  assert.deepEqual(config.linux.target, [{ target: "AppImage", arch: ["x64"] }]);
+  const packager = new LinuxPackager({ config, metadata });
+  // AppImageTarget.build uses this production expansion; do not duplicate its arch mapping.
+  const name = packager.expandArtifactNamePattern(config.appImage, "AppImage", archFromString(config.linux.target[0].arch[0]));
+  const root = await fixture(t, "linux", [name]);
+  assert.deepEqual(await prepareArtifacts(root, "linux"), [`release/${name}`, "release/SHA256SUMS.txt"]);
+  assert.deepEqual(filenames.linux, [name]);
+});
 
 test("unrelated release files, recursive directories and updater metadata never enter allowlist", async (t) => {
   const root = await fixture(t);

@@ -94,7 +94,7 @@ Windows остановился на загрузке native Electron с HTTP 504
 chat-desktop-spike-0.1.0-win-x64.exe
 chat-desktop-spike-0.1.0-mac-arm64.dmg
 chat-desktop-spike-0.1.0-mac-x64.dmg
-chat-desktop-spike-0.1.0-linux-x64.AppImage
+chat-desktop-spike-0.1.0-linux-x86_64.AppImage
 ```
 
 Actions artifact называется `desktop-test-<platform>-<run_id>-<run_attempt>` и хранится 7 дней. [Helper](<scripts/artifacts.mjs>) запускается как `node scripts/artifacts.mjs windows` (либо `macos`/`linux`) после packaging. Каждый platform artifact сопровождается `SHA256SUMS.txt`. Сверьте checksum до установки; не принимайте произвольный zip каталога `release` как допустимую поставку. В artifacts не должны попадать unpacked app, debug/cache, исходники профилей, credentials или signing material.

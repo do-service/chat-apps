@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 const targets = new Map([
   ["windows", ["win-x64.exe"]],
   ["macos", ["mac-arm64.dmg", "mac-x64.dmg"]],
-  ["linux", ["linux-x64.AppImage"]],
+  ["linux", ["linux-x86_64.AppImage"]],
 ]);
 
 export async function prepareArtifacts(root, platform) {
