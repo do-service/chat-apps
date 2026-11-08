@@ -1,0 +1,31 @@
+{
+  "name": "chat-desktop-spike",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Isolated remote-site desktop notification acceptance spike",
+  "author": "Chat",
+  "license": "UNLICENSED",
+  "main": "dist/main.cjs",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && node scripts/build.mjs",
+    "test": "node scripts/test.mjs",
+    "start": "npm run build && electron .",
+    "spike": "npm run build && electron . --spike",
+    "package:dir": "npm run build && electron-builder --dir --publish never",
+    "package:spike": "npm run typecheck && node scripts/build.mjs --spike && electron-builder --dir --publish never",
+    "package:mac": "npm run build && electron-builder --mac --publish never",
+    "package:win": "npm run build && electron-builder --win --x64 --publish never",
+    "package:linux": "npm run build && electron-builder --linux --x64 --publish never"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,98 @@
+name: Desktop test installers
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installers:
+    name: Test installer (${{ matrix.platform }})
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-2025
+          - platform: macos
+            runner: macos-15
+          - platform: linux
+            runner: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      # Electron 45 downloads lazily on require; initialize once before concurrent tests.
+      - name: Initialize Electron executable
+        run: node -e "const fs=require('node:fs'); if(!fs.existsSync(require('electron'))) throw new Error('Electron executable missing');"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test desktop behavior
+        run: npm test
+
+      - name: Test artifact allowlist and checksums
+        run: node --test scripts/artifacts.test.mjs
+
+      - name: Build standalone desktop
+        run: npm run build
+
+      - name: Package Windows x64 NSIS test installer
+        if: matrix.platform == 'windows'
+        run: node node_modules/electron-builder/cli.js --win nsis --x64 --publish never
+
+      # Test-only ad-hoc signing: never change the hardened production configuration.
+      - name: Package macOS arm64 and x64 ad-hoc test DMGs
+        if: matrix.platform == 'macos'
+        run: >-
+          node node_modules/electron-builder/cli.js --mac dmg --arm64 --x64 --publish never
+          -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false
+
+      - name: Package Linux x64 AppImage test installer
+        if: matrix.platform == 'linux'
+        run: node node_modules/electron-builder/cli.js --linux AppImage --x64 --publish never
+
+      - name: Verify exact installers and generate SHA-256 manifest
+        id: artifacts
+        run: node scripts/artifacts.mjs ${{ matrix.platform }}
+
+      - name: Upload test installers and checksums only
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: desktop-test-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.artifacts.outputs.paths }}
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 7
+          compression-level: 0

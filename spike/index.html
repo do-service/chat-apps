@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chat Desktop Spike — D1</title>
+  <link rel="stylesheet" href="spike.css">
+  <script src="spike.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">CHAT DESKTOP / D1 / ЛОКАЛЬНЫЙ СЦЕНАРИЙ</p>
+      <h1>Проверка уведомлений и lifecycle</h1>
+      <p>Василий, это изолированный прототип без подключения реальных сообщений. Крестик скрывает окно; <strong>меню → Выход</strong> завершает процесс и получение новых событий.</p>
+    </header>
+    <p id="status" role="status">Подключение bridge…</p>
+    <section aria-labelledby="capabilities-title">
+      <h2 id="capabilities-title">Состояние оболочки</h2>
+      <dl>
+        <div><dt>Capabilities</dt><dd id="capabilities">—</dd></div>
+        <div><dt>Окно</dt><dd id="window-state">—</dd></div>
+        <div><dt>Последняя activation</dt><dd id="activation">—</dd></div>
+      </dl>
+    </section>
+    <section aria-labelledby="notifications-title">
+      <h2 id="notifications-title">Уведомления</h2>
+      <div class="fields">
+        <label>Account ID<input id="account" value="spike-account" maxlength="128" autocomplete="off"></label>
+        <label>Chat ID<input id="chat" value="spike-chat" maxlength="128" autocomplete="off"></label>
+        <label>Call ID<input id="call" value="spike-call" maxlength="128" autocomplete="off"></label>
+        <label>Текст локального теста<input id="body" value="Проверка клика из центра уведомлений ОС" maxlength="2048" autocomplete="off"></label>
+        <label class="check"><input id="silent" type="checkbox" checked>Без звука</label>
+      </div>
+      <div class="actions">
+        <button id="set-account">Установить account</button>
+        <button id="message">Новое сообщение (TTL 5 мин)</button>
+        <button id="call-notification">Приглашение на звонок (TTL 20 с)</button>
+        <button id="duplicate">Повторить последний event ID</button>
+        <button id="delayed">Сообщение через ≥5 с: скройте окно</button>
+        <button id="close-last">Закрыть последнее</button>
+        <button id="clear">Очистить всё</button>
+        <button id="logout">Logout / очистить account</button>
+      </div>
+      <p class="hint">Одинаковый chat группируется/заменяется, одинаковый event ID дедуплицируется. Для проверки account switch измените ID и нажмите «Установить account». Звонок истечёт через 20 с; поздний клик не должен активировать чат. Таймер renderer может задержаться в фоне — получение реальных событий здесь не проверяется.</p>
+    </section>
+    <section aria-labelledby="security-title">
+      <h2 id="security-title">Проверка границ</h2>
+      <div class="actions">
+        <button id="iframe">Same-origin iframe: нет прямой инъекции bridge</button>
+        <button id="opaque-iframe">Opaque sandbox iframe: проверка изоляции</button>
+        <button id="permission">Browser notifications: permission deny</button>
+        <button id="idp">Чужой origin / IdP: переход запрещён</button>
+        <button id="dangerous">Небезопасный popup: запрещён</button>
+        <a href="https://www.electronjs.org/docs/latest/tutorial/security" target="_blank" rel="noopener noreferrer">HTTPS-ссылка: запрос подтверждения</a>
+        <label class="badge">Badge (macOS)<input id="badge" type="number" min="0" max="999999" value="3"><button id="set-badge">Применить</button></label>
+      </div>
+      <div id="iframe-result"></div>
+    </section>
+    <section aria-labelledby="events-title">
+      <div class="section-heading"><h2 id="events-title">Локальный журнал</h2><button id="clear-log">Очистить журнал</button></div>
+      <pre id="events" aria-live="polite"></pre>
+    </section>
+    <footer>API supported ≠ ОС покажет уведомление: проверьте permissions, Focus/DND и центр уведомлений. Installed acceptance Windows/macOS/Linux, подпись macOS, production auth (D4), frontend adapter (D2–D3), media/Blob/P2P files (D5) ещё не подтверждены. Повторить загрузку и посмотреть диагностику можно в меню/tray.</footer>
+  </main>
+</body>
+</html>
