@@ -1,6 +1,7 @@
 import { build } from "esbuild";
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { buildNotificationPermission } from "./build-native.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const diagnostic = process.argv.includes("--spike");
@@ -30,6 +31,7 @@ if (raw !== undefined) {
 }
 
 await mkdir(new URL("../dist/", import.meta.url), { recursive: true });
+await buildNotificationPermission();
 await build({
   absWorkingDir: root,
   entryPoints: { main: "src/main.ts", preload: "src/preload.ts" },

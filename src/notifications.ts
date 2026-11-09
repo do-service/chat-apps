@@ -29,6 +29,7 @@ export type NativeCallbacks = { click(): void; failed(): void };
 export type NativeOptions = NotificationRequest & { osId: string; groupId: string };
 export type NotificationNativePort = {
   supported(): boolean;
+  canShow?(): boolean;
   create(options: NativeOptions, callbacks: NativeCallbacks): NativeHandle & { show(): void };
   subscribeActivation?(activate: (osId: string) => void): () => void;
   restore?(callbacks: (osId: string) => NativeCallbacks | undefined): Promise<void>;
@@ -134,6 +135,7 @@ export class NotificationService {
   private initialized = false;
   private cancelTimer: (() => void) | undefined;
   private unsubscribe: (() => void) | undefined;
+  private restoring: Promise<void> | undefined;
 
   constructor(private readonly options: ServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -161,6 +163,18 @@ export class NotificationService {
     this.prune();
     this.armTimer();
     this.unsubscribe = this.options.native.subscribeActivation?.((osId) => this.activate(osId));
+    await this.restoreNative();
+  }
+
+  // A passive startup permission query may finish later. Retain the journal and
+  // allow history binding after grant without reinitializing account/readiness state.
+  restoreNative(): Promise<void> {
+    if (!this.initialized || this.disposed) return Promise.resolve();
+    if (!this.restoring) this.restoring = this.restoreHistory().finally(() => { this.restoring = undefined; });
+    return this.restoring;
+  }
+
+  private async restoreHistory(): Promise<void> {
     try {
       await this.options.native.restore?.((osId) => {
         if (this.disposed) return undefined;
@@ -201,6 +215,7 @@ export class NotificationService {
     if (this.disposed || !this.initialized) return { accepted: false, reason: "failed" };
     this.prune();
     if (!this.accountBound || request.accountId !== this.accountId) return { accepted: false, reason: "account-mismatch" };
+    if (this.options.native.canShow?.() === false) return { accepted: false, reason: "failed" };
     const now = this.now();
     if (request.expiresAt <= now) return { accepted: false, reason: "expired" };
     if (!this.supported()) {

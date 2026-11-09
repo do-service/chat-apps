@@ -17,14 +17,14 @@ const filenames = {
   linux: ["chat-desktop-spike-0.1.0-linux-x86_64.AppImage"],
 };
 
-async function fixture(t, platform = "windows", names = filenames[platform]) {
+async function fixture(t, platform = "windows", names = filenames[platform], version = "0.1.0") {
   const root = await mkdtemp(path.join(tmpdir(), "desktop-artifacts-test-"));
   t.after(async () => {
     assert.equal(path.dirname(root), path.resolve(tmpdir()));
     assert.ok(path.basename(root).startsWith("desktop-artifacts-test-"));
     await rm(root, { recursive: true, force: true });
   });
-  await writeFile(path.join(root, "package.json"), JSON.stringify({ version: "0.1.0" }));
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ version }));
   await mkdir(path.join(root, "release"));
   for (const name of names) await writeFile(path.join(root, "release", name), `installer:${name}\n`);
   return root;
@@ -44,6 +44,22 @@ for (const platform of Object.keys(filenames)) {
   });
 }
 
+for (const [platform, names] of Object.entries({
+  windows: ["chat-desktop-spike-0.1.1-preview.1-win-x64.exe"],
+  macos: ["chat-desktop-spike-0.1.1-preview.1-mac-arm64.dmg", "chat-desktop-spike-0.1.1-preview.1-mac-x64.dmg"],
+  linux: ["chat-desktop-spike-0.1.1-preview.1-linux-x86_64.AppImage"],
+})) {
+  test(`${platform}: prerelease version retains exact installer names and checksums`, async (t) => {
+    const root = await fixture(t, platform, names, "0.1.1-preview.1");
+    assert.deepEqual(await prepareArtifacts(root, platform), names.map((name) => `release/${name}`).concat("release/SHA256SUMS.txt"));
+    const lines = await Promise.all(names.map(async (name) => {
+      const bytes = await readFile(path.join(root, "release", name));
+      return `${createHash("sha256").update(bytes).digest("hex")}  ${name}\n`;
+    }));
+    assert.equal(await readFile(path.join(root, "release/SHA256SUMS.txt"), "utf8"), lines.join(""));
+  });
+}
+
 test("linux: allowlist matches installed electron-builder expansion of the real config", async (t) => {
   const projectDir = fileURLToPath(new URL("../", import.meta.url));
   const metadata = JSON.parse(await readFile(path.join(projectDir, "package.json"), "utf8"));
@@ -52,9 +68,9 @@ test("linux: allowlist matches installed electron-builder expansion of the real 
   const packager = new LinuxPackager({ config, metadata });
   // AppImageTarget.build uses this production expansion; do not duplicate its arch mapping.
   const name = packager.expandArtifactNamePattern(config.appImage, "AppImage", archFromString(config.linux.target[0].arch[0]));
-  const root = await fixture(t, "linux", [name]);
+  const root = await fixture(t, "linux", [name], metadata.version);
   assert.deepEqual(await prepareArtifacts(root, "linux"), [`release/${name}`, "release/SHA256SUMS.txt"]);
-  assert.deepEqual(filenames.linux, [name]);
+  assert.equal(name, `chat-desktop-spike-${metadata.version}-linux-x86_64.AppImage`);
 });
 
 test("unrelated release files, recursive directories and updater metadata never enter allowlist", async (t) => {

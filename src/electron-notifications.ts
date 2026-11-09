@@ -16,7 +16,9 @@ export type ElectronNotificationApi = {
   remove(id: string): void;
 };
 
-export function createElectronNotificationPort(platform: Platform, api: ElectronNotificationApi = Notification): NotificationNativePort {
+export function createElectronNotificationPort(
+  platform: Platform, api: ElectronNotificationApi = Notification, authorized: () => boolean = () => false,
+): NotificationNativePort {
   const history = new Map<string, ElectronNotificationHandle>();
   let active = true;
   const bind = (notification: ElectronNotificationHandle, callbacks: NativeCallbacks): void => {
@@ -27,15 +29,22 @@ export function createElectronNotificationPort(platform: Platform, api: Electron
     // A Windows timeout may only move the toast into Action Center; it is not expiry.
   };
   return {
-    supported: () => api.isSupported(),
+    // isSupported itself constructs Electron's macOS presenter and requests authorization.
+    // Capability means the API exists; permission is a separate, fail-closed gate.
+    supported: () => platform === "darwin" ? true : api.isSupported(),
+    canShow: () => platform !== "darwin" || authorized(),
     create: (options, callbacks) => {
+      if (platform === "darwin" && !authorized()) throw new Error("Notification permission unavailable");
       const notification = new api({
         id: options.osId, groupId: options.groupId,
         title: options.title, body: options.body, silent: options.silent,
         ...(platform === "win32" ? { toastXml: windowsToastXml(options) } : {}),
       });
       bind(notification, callbacks);
-      return { show: () => notification.show(), close: () => notification.close() };
+      return {
+        show: () => { if (platform !== "darwin" || authorized()) notification.show(); },
+        close: () => { if (platform !== "darwin" || authorized()) notification.close(); },
+      };
     },
     subscribeActivation: (activate) => {
       if (platform === "win32") {
@@ -49,22 +58,24 @@ export function createElectronNotificationPort(platform: Platform, api: Electron
       return () => { active = false; };
     },
     restore: async (callbacks) => {
-      if (platform !== "darwin") return;
+      if (platform !== "darwin" || !authorized() || !active) return;
       const delivered = await api.getHistory();
       for (const notification of delivered) {
-        if (!active) return;
+        if (!active || !authorized()) return;
         const handlers = callbacks(notification.id);
         if (!handlers) {
           api.remove(notification.id);
           continue;
         }
-        bind(notification, handlers);
-        history.set(notification.id, notification);
+        if (!history.has(notification.id)) {
+          bind(notification, handlers);
+          history.set(notification.id, notification);
+        }
       }
     },
     remove: (osId) => {
       history.delete(osId);
-      if (platform === "darwin") api.remove(osId);
+      if (platform === "darwin" && authorized()) api.remove(osId);
       // Windows close() removes live toasts. There is no public Windows history
       // remove-by-ID API for a toast whose object was lost on process restart.
     },

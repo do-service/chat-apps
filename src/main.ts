@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, protocol, session, shell, Tray,
+  app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, protocol, session, shell, systemPreferences, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions, type Session,
 } from "electron";
 import { existsSync, readFileSync } from "node:fs";
@@ -10,9 +10,11 @@ import {
 } from "./contract";
 import { resolveConfiguration, type RuntimeConfiguration } from "./config";
 import { createElectronNotificationPort } from "./electron-notifications";
+import { coordinateNotificationPermissionController, createNotificationPermissionController, type NotificationPermissionController } from "./notification-permission";
 import { FileMetadataStore } from "./notification-store";
 import { NotificationService } from "./notifications";
 import { createHiddenRecoveryScheduler, isAbortedNavigation } from "./lifecycle";
+import { createMediaPermissionPolicy } from "./media-permissions";
 import { AuthFailure, DesktopAuthService } from "./desktop-auth";
 import { createElectronAuthAttempt, installAuthCookieBarrier } from "./electron-auth";
 import {
@@ -36,6 +38,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow: BrowserWindow | null = null;
+let mediaNavigationGeneration = 0;
 let tray: Tray | null = null;
 let notifications: NotificationService | null = null;
 let desktopAuth: DesktopAuthService | null = null;
@@ -43,6 +46,8 @@ let compatibilityLogin = false;
 let compatibilityDialog: AbortController | null = null;
 let quitting = false;
 let rendererReady = false;
+let notificationAccount: string | null = null;
+let notificationAccountGeneration = 0;
 let pendingFocus = false;
 let restoreMissingWindow: (() => void) | null = null;
 let externalPrompt = false;
@@ -116,26 +121,75 @@ function emit(config: RuntimeConfiguration, event: DesktopEvent): void {
 function authorize(event: IpcMainInvokeEvent, config: RuntimeConfiguration): void {
   const window = mainWindow;
   const frame = event.senderFrame;
-  if (!window || window.isDestroyed() || !frame || frame.isDestroyed() || !isTrustedSender({
+  if (quitting || !window || window.isDestroyed() || window.webContents.isDestroyed() || !frame || frame.isDestroyed() || !isTrustedSender({
     expectedContents: event.sender === window.webContents,
     mainFrame: frame === window.webContents.mainFrame && frame.parent === null,
     frameOrigin: frame.origin, frameURL: frame.url,
   }, config.trustedOrigin)) throw new Error("Desktop IPC sender rejected");
 }
 
-function registerIPC(config: RuntimeConfiguration, service: NotificationService, badge: boolean): void {
-  const handle = (channel: string, count: number, action: (args: unknown[]) => unknown) => {
+function registerIPC(
+  config: RuntimeConfiguration, service: NotificationService, badge: boolean, permission: NotificationPermissionController,
+): void {
+  const documentGuard = (event: IpcMainInvokeEvent, account: boolean): (() => boolean) => {
+    const window = mainWindow;
+    const frame = event.senderFrame;
+    const navigation = mediaNavigationGeneration;
+    const binding = notificationAccountGeneration;
+    const url = frame?.url;
+    return () => {
+      if (quitting || window !== mainWindow || frame !== mainWindow?.webContents.mainFrame
+        || frame?.url !== url || mainWindow?.webContents.getURL() !== url
+        || navigation !== mediaNavigationGeneration || binding !== notificationAccountGeneration
+        || (account && (!rendererReady || notificationAccount === null))) return false;
+      try { authorize(event, config); return true; } catch { return false; }
+    };
+  };
+  const foreground = () => {
+    const state = windowState();
+    return state.focused && state.visible && !state.minimized;
+  };
+  const restoreIfGranted = () => {
+    if (permission.current() === "granted") void service.restoreNative();
+  };
+  const handle = (channel: string, count: number, action: (args: unknown[], event: IpcMainInvokeEvent) => unknown) => {
     ipcMain.handle(channel, (event: IpcMainInvokeEvent, ...args: unknown[]) => {
       authorize(event, config);
       if (args.length !== count) throw new Error("Invalid desktop IPC arguments");
-      try { return action(args); }
-      catch { throw new Error("Desktop operation failed"); }
+      try {
+        const result = action(args, event);
+        if (result instanceof Promise) return result.catch(() => { throw new Error("Desktop operation failed"); });
+        return result;
+      } catch { throw new Error("Desktop operation failed"); }
     });
   };
   handle(IPC.capabilities, 0, (): DesktopCapabilities => ({
     version: BRIDGE_VERSION, platform: platform(), notifications: service.supported(),
     notificationPermission: "unknown", badge, lifecycle: true, productionAuth: !config.spike,
   }));
+  handle(IPC.getNotificationPermission, 0, async (_args, event) => {
+    const current = documentGuard(event, false);
+    const result = await permission.get(current);
+    if (!current()) return "unknown";
+    restoreIfGranted();
+    return result;
+  });
+  handle(IPC.requestNotificationPermission, 0, async (_args, event) => {
+    const current = documentGuard(event, true);
+    if (!current() || !foreground()) throw new Error("Notification consent context unavailable");
+    const result = await permission.request(current, () => current() && foreground());
+    if (!current()) return "unknown";
+    restoreIfGranted();
+    return result;
+  });
+  handle(IPC.openNotificationSettings, 0, async (_args, event) => {
+    const current = documentGuard(event, true);
+    if (!current() || !foreground()) throw new Error("Notification settings context unavailable");
+    const status = await permission.get(current);
+    if (process.platform !== "darwin" || status !== "denied" || !current() || !foreground()) return;
+    // macOS has no public notification-settings URL API: fixed best-effort pane, never renderer input.
+    await shell.openExternal(`x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=${APP_ID}`);
+  });
   handle(IPC.getAuthState, 0, () => desktopAuth?.getState() ?? { status: "error", code: "unavailable" });
   handle(IPC.beginLogin, 1, ([request]) => {
     if (!isLoginRequest(request)) throw new Error("Invalid desktop login request");
@@ -148,11 +202,20 @@ function registerIPC(config: RuntimeConfiguration, service: NotificationService,
     if (accountId !== null && !isIdentifier(accountId)) throw new Error("Invalid account identifier");
     // An already-ready renderer may receive pending activation during account binding.
     emit(config, { type: "window-state", state: windowState() });
+    notificationAccountGeneration++;
+    notificationAccount = accountId;
     service.setAccount(accountId);
     if (badge) app.setBadgeCount(0);
   });
-  handle(IPC.showNotification, 1, ([request]) => {
+  handle(IPC.showNotification, 1, async ([request], event) => {
     if (!isNotificationRequest(request)) throw new Error("Invalid notification");
+    if (process.platform === "darwin") {
+      const context = documentGuard(event, false);
+      const current = () => context() && notificationAccount !== null;
+      const status = await permission.get(current);
+      if (!current() || status !== "granted") return { accepted: false, reason: "failed" };
+      restoreIfGranted();
+    }
     return service.show(request);
   });
   handle(IPC.closeNotification, 1, ([key]) => {
@@ -192,9 +255,15 @@ async function openExternal(config: RuntimeConfiguration, value: string): Promis
 }
 
 function installSessionPolicy(ses: Session, config: RuntimeConfiguration): void {
-  // D1 grants no browser notification/media/device permissions; native notifications use main APIs.
-  ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  ses.setPermissionCheckHandler(() => false);
+  // Only the live trusted macOS main document may request microphone/camera access on use.
+  // Browser notifications, screen and device permissions remain denied.
+  const media = createMediaPermissionPolicy({
+    platform: process.platform, spike: config.spike, trustedOrigin: config.trustedOrigin,
+    owner: () => quitting ? null : mainWindow, generation: () => mediaNavigationGeneration,
+    system: systemPreferences, diagnose: (message) => { diagnostic = message; },
+  });
+  ses.setPermissionRequestHandler(media.request);
+  ses.setPermissionCheckHandler(media.check);
   ses.setDevicePermissionHandler(() => false);
   ses.setDisplayMediaRequestHandler((_request, callback) => callback({}));
   ses.on("file-system-access-restricted", (_event, _details, callback) => callback("deny"));
@@ -331,11 +400,15 @@ function installWindowPolicy(
     return { action: "deny" };
   });
   contents.on("did-start-navigation", (details) => {
+    // A consent answer must not revive a request from an earlier document, even after back/reload.
+    if (details.isMainFrame) mediaNavigationGeneration++;
     if (details.isMainFrame && !details.isSameDocument) {
       rendererReady = false;
       service.setReady(false);
     }
   });
+  // Also invalidate requests made by the departing document while navigation was in flight.
+  contents.on("did-navigate", () => { mediaNavigationGeneration++; });
   contents.on("did-fail-load", (_event, code, _description, _url, isMainFrame) => {
     if (!isMainFrame || code === -3) return;
     diagnostic = `Не удалось загрузить страницу (код ${code})`;
@@ -343,6 +416,7 @@ function installWindowPolicy(
     void showErrorPage(window);
   });
   contents.on("render-process-gone", () => {
+    mediaNavigationGeneration++;
     rendererReady = false;
     service.setReady(false);
     diagnostic = "Renderer завершился; используйте «Повторить загрузку»";
@@ -403,7 +477,7 @@ function installMenus(config: RuntimeConfiguration, service: NotificationService
     const state = windowState();
     await dialog.showMessageBox({
       type: "info", title: "Chat Desktop Spike — диагностика", message: diagnostic,
-      detail: `Режим: ${config.spike ? "локальный --spike" : "HTTPS оболочка"}\nФокус: ${state.focused}; видно: ${state.visible}; свёрнуто: ${state.minimized}\nNative notifications API: ${service.supported()} (не гарантия показа ОС)\nКрестик скрывает окно; «Выход» завершает получение событий.\nСистемный вход: ${config.spike ? "выключен в --spike" : "реализован; сервер и IdP требуют отдельной приёмки"}. Media (D5), frontend notification adapter (D2–D3) не реализованы.`,
+      detail: `Режим: ${config.spike ? "локальный --spike" : "HTTPS оболочка"}\nФокус: ${state.focused}; видно: ${state.visible}; свёрнуто: ${state.minimized}\nNative notifications API: ${service.supported()} (не гарантия показа ОС)\nКрестик скрывает окно; «Выход» завершает получение событий.\nСистемный вход: ${config.spike ? "выключен в --spike" : "реализован; сервер и IdP требуют отдельной приёмки"}. Микрофон и камера: только доверенное главное окно macOS с отдельным согласием ОС для каждого устройства; демонстрация экрана запрещена.`,
     });
   };
   const menuOperation = (operation: () => void) => () => {
@@ -429,10 +503,16 @@ function installMenus(config: RuntimeConfiguration, service: NotificationService
     { type: "separator" },
     { label: "Выход", accelerator: "CommandOrControl+Q", click: () => app.quit() },
   ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: "Chat Desktop Spike", submenu: actions },
+  const applicationActions = [...actions];
+  const applicationMenu: MenuItemConstructorOptions[] = [
+    { label: "Chat Desktop Spike", submenu: applicationActions },
     { label: "Правка", submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" }] },
-  ]));
+  ];
+  if (process.platform === "darwin") {
+    applicationActions.splice(-1, 0, { role: "hide", accelerator: "Command+H" }, { type: "separator" });
+    applicationMenu.push({ label: "Окно", submenu: [{ role: "minimize", accelerator: "Command+M" }] });
+  }
+  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenu));
   try {
     tray = new Tray(trayIcon());
     tray.setToolTip("Chat Desktop Spike — крестик скрывает; Выход завершает");
@@ -475,8 +555,9 @@ async function start(): Promise<void> {
     mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.id : null);
   setStartupStage("session-policy-installed");
   setStartupStage("creating-notification-service");
+  const permission = coordinateNotificationPermissionController(createNotificationPermissionController(os), () => !quitting);
   const service = new NotificationService({
-    native: createElectronNotificationPort(os),
+    native: createElectronNotificationPort(os, undefined, () => !quitting && permission.current() === "granted"),
     store: new FileMetadataStore(join(app.getPath("userData"), "notifications", config.profileKey)),
     emit: (event) => emit(config, event), onActivate: focusWindow,
   });
@@ -484,14 +565,17 @@ async function start(): Promise<void> {
   // Journal loading and central activation subscription run synchronously; OS history is best effort.
   // In particular, a pending macOS Notification.getHistory() must never gate creation of the app window.
   setStartupStage("starting-notification-history");
-  void service.initialize().catch(() => {
+  const initialization = service.initialize().catch(() => {
     diagnostic = "Не удалось восстановить историю уведомлений; окно приложения продолжает работать";
+  });
+  if (os === "darwin") void initialization.then(() => permission.get(() => !quitting)).then((status) => {
+    if (!quitting && status === "granted") void service.restoreNative();
   });
   setStartupStage("notification-history-requested");
   // Windows overlay and desktop-environment-specific Linux badge support are outside D1.
   const badge = os === "darwin";
   setStartupStage("registering-ipc");
-  registerIPC(config, service, badge);
+  registerIPC(config, service, badge, permission);
   const createWindow = (showWhenReady: boolean): BrowserWindow => {
     setStartupStage("creating-window");
     const window = new BrowserWindow({
@@ -505,6 +589,11 @@ async function start(): Promise<void> {
       },
     });
     mainWindow = window;
+    window.on("focus", () => {
+      if (os === "darwin") void permission.get(() => !quitting && mainWindow === window).then((status) => {
+        if (!quitting && mainWindow === window && status === "granted") void service.restoreNative();
+      });
+    });
     setStartupStage("window-created");
     setStartupStage("installing-window-policy");
     installWindowPolicy(window, config, service, () => recoverRoot());
@@ -590,6 +679,8 @@ async function start(): Promise<void> {
       emit: (state) => handleAuthState(config, state),
       onCommitFailure: loadTarget,
       onSuccess: () => {
+        notificationAccountGeneration++;
+        notificationAccount = null;
         try { service.setAccount(null); if (badge) app.setBadgeCount(0); }
         catch { diagnostic = "Вход завершён; не удалось очистить локальные уведомления предыдущего аккаунта"; }
         loadTarget();

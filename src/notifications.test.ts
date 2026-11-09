@@ -493,6 +493,7 @@ class FakeElectronNotification {
   static delivered: FakeElectronNotification[] = [];
   static historyPromise: Promise<FakeElectronNotification[]> | undefined;
   static removed: string[] = [];
+  static calls: string[] = [];
   static activation: (details: unknown) => void = () => {};
   readonly id: string;
   readonly listeners = new Map<string, () => void>();
@@ -502,14 +503,42 @@ class FakeElectronNotification {
     this.id = options.id ?? "";
     FakeElectronNotification.instances.push(this);
   }
-  static isSupported(): boolean { return true; }
+  static isSupported(): boolean { this.calls.push("isSupported"); return true; }
   static handleActivation(callback: (details: unknown) => void): void { this.activation = callback; }
-  static async getHistory(): Promise<FakeElectronNotification[]> { return this.historyPromise ?? this.delivered; }
-  static remove(id: string): void { this.removed.push(id); }
+  static async getHistory(): Promise<FakeElectronNotification[]> { this.calls.push("getHistory"); return this.historyPromise ?? this.delivered; }
+  static remove(id: string): void { this.calls.push("remove"); this.removed.push(id); }
   on(event: "click" | "failed", callback: () => void): void { this.listeners.set(event, callback); }
   show(): void { this.shows++; }
   close(): void { this.closed = true; }
 }
+
+test("macOS presenter APIs are gated until granted, including cleanup and deferred cold restore", async () => {
+  const store = new MemoryStore();
+  const original = await fixture(store); original.service.setAccount("alice"); original.service.show(request());
+  const id = original.native.last().options.osId; original.service.dispose();
+  const restored = new FakeElectronNotification({ id });
+  FakeElectronNotification.delivered = [restored]; FakeElectronNotification.calls = [];
+  let granted = false;
+  const events: DesktopEvent[] = [];
+  const port = createElectronNotificationPort("darwin", FakeElectronNotification, () => granted);
+  const service = new NotificationService({ native: port, store, now: () => 1_000,
+    emit: (event) => events.push(event), schedule: () => () => {} });
+  await service.initialize();
+  assert.equal(service.supported(), true);
+  service.setAccount("alice"); service.setReady(true);
+  assert.equal(service.show(request({ id: "blocked", route: { chatId: "other" } })).accepted, false);
+  port.remove?.("expired");
+  assert.deepEqual(FakeElectronNotification.calls, []);
+  assert.equal(validateJournal(store.value, 1_000).length, 1);
+  granted = true;
+  await service.restoreNative();
+  restored.listeners.get("click")?.();
+  assert.equal(activationEvents(events).length, 1);
+  granted = false; FakeElectronNotification.calls = [];
+  service.clear(); assert.equal(service.show(request()).accepted, false);
+  assert.deepEqual(FakeElectronNotification.calls, []);
+  service.dispose();
+});
 
 test("Electron adapter converges warm instance and central Windows callbacks in both orderings", async () => {
   for (const centralFirst of [true, false]) {
@@ -545,7 +574,7 @@ test("Electron macOS history reattaches click without re-show and removes unknow
   FakeElectronNotification.delivered = [restored, unknown];
   FakeElectronNotification.removed = [];
   const events: DesktopEvent[] = [];
-  const service = new NotificationService({ native: createElectronNotificationPort("darwin", FakeElectronNotification), store,
+  const service = new NotificationService({ native: createElectronNotificationPort("darwin", FakeElectronNotification, () => true), store,
     emit: (event) => events.push(event), now: () => 1_000, schedule: () => () => {} });
   await service.initialize();
   service.setAccount("alice");
@@ -564,7 +593,7 @@ test("late macOS history after Quit neither binds nor removes delivered notifica
   FakeElectronNotification.historyPromise = new Promise((resolve) => { finishHistory = resolve; });
   FakeElectronNotification.removed = [];
   try {
-    const service = new NotificationService({ native: createElectronNotificationPort("darwin", FakeElectronNotification),
+    const service = new NotificationService({ native: createElectronNotificationPort("darwin", FakeElectronNotification, () => true),
       emit: () => {}, schedule: () => () => {} });
     const initialization = service.initialize();
     service.dispose();

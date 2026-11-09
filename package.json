@@ -1,6 +1,6 @@
 {
   "name": "chat-desktop-spike",
-  "version": "0.1.0",
+  "version": "0.1.1-preview.1",
   "private": true,
   "description": "Isolated remote-site desktop notification acceptance spike",
   "author": "Chat",

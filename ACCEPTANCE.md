@@ -1,6 +1,6 @@
 # Desktop acceptance
 
-Дата сверки исходников: **2026-11-08**. Объект: standalone `Chat Desktop Spike` `0.1.0`, app ID `ru.exz-vps.chat.desktop.spike`. Обзор и команды разработки — в [README.md](<README.md>).
+Дата подготовки preview: **2026-11-09**. Объект: standalone `Chat Desktop Spike` `0.1.1-preview.1`, app ID `ru.exz-vps.chat.desktop.spike`. Обзор, ограничения signing и ожидаемые ссылки загрузок — в [README.md](<README.md>). Публикация prerelease на момент подготовки документа **ещё не подтверждена**; исторические результаты `0.1.0` ниже не являются результатами этой версии.
 
 ## Статус и правила evidence
 
@@ -21,14 +21,18 @@
 | --- | --- | --- |
 | Normal target | [app-config.json](<app-config.json>) задаёт `https://chat.exz-vps.ru`; [build script](<scripts/build.mjs>) встраивает HTTPS origin | Доступность сайта, его версия и развёрнутый frontend adapter |
 | Diagnostic mode | [src/config.ts](<src/config.ts>) выбирает явный `--spike` или diagnostic build marker | Реальные сообщения, auth и работа backend |
-| D3 bridge | [src/contract.ts](<src/contract.ts>) и [src/preload.ts](<src/preload.ts>) содержат bridge v1, включая selective `dismissNotifications` | Deployment D3 frontend-кода на сайте и end-to-end read/call reconciliation |
+| Desktop bridge | [src/contract.ts](<src/contract.ts>) и [src/preload.ts](<src/preload.ts>) содержат bridge v1, selective `dismissNotifications` и optional native permission methods | Совместимый развёрнутый frontend и end-to-end read/call/consent reconciliation |
+| macOS notification consent | [Controller](<src/notification-permission.ts>) и [native addon](<native/notification-permission.mm>) читают/запрашивают OS consent в main process; запрос требует явного действия через compatible frontend и текущий trusted foreground context | Первый системный диалог, разрешение, banner или повторное предложение в прежнем профиле |
+| macOS hotkeys | [src/main.ts](<src/main.ts>) использует menu roles `minimize`/`hide` для `Cmd+M`/`Cmd+H` только macOS, сохраняет `Cmd+W` close-to-hide и `Cmd+Q` Quit | Реальное поведение клавиатуры и menu/Dock на установленном Mac |
 | Renderer isolation | [src/main.ts](<src/main.ts>) задаёт sandbox/context isolation, отключает Node integration; [src/security.ts](<src/security.ts>) проверяет origin/frame и payload | Полная security-приёмка установленного приложения |
 | Native notifications | [src/notifications.ts](<src/notifications.ts>) содержит account binding, dedup, grouping, TTL и activation validation | Реальный banner, звук, центр ОС и cold-start activation |
 | Auth | [src/desktop-auth.ts](<src/desktop-auth.ts>) и [src/electron-auth.ts](<src/electron-auth.ts>) реализуют system-browser transaction/exchange/ack | Наличие server endpoints, реальный IdP, успешный вход |
-| Media/files | [src/main.ts:194–219](<src/main.ts#L194-L219>) содержит deny permissions и ограничение downloads | Поддержка звонков, screen share, Blob/P2P/external attachments |
+| Media/files | [Main policy](<src/main.ts>) и [media policy](<src/media-permissions.ts>) допускают macOS mic/camera по отдельному OS consent для live trusted main frame; на Windows/Linux mic/camera DENY. Browser notifications/device/display/File System Access DENY везде; downloads ограничены | Реальные voice/video calls, screen share, Blob/P2P/external attachments |
 | Packaging | [electron-builder.yml](<electron-builder.yml>) задаёт NSIS x64, два DMG и AppImage x64 | Установка/запуск, trusted signing, notarization и popup acceptance ОС |
 
-D3 здесь обозначает экспортированный исходный срез desktop-кода. Обычная оболочка не содержит frontend сайта и показывает текущий remote deployment. Сайт развёртывается отдельно; этот репозиторий и эта задача **не выполняют deployment сайта**.
+Обычная оболочка не содержит frontend сайта и показывает текущий remote deployment. Новый macOS consent flow требует одновременно новой оболочки с packaged native addon и совместимого frontend-адаптера сайта. Сайт развёртывается отдельно; этот репозиторий и эта задача **не выполняют deployment сайта**.
+
+App identity, профиль/session partition и сохранённые preferences не сбрасываются. Сохранённое «включено»/«выключено»/закрытое предложение может подавлять startup offer: обновление **не гарантирует** ни новый banner, ни первый OS prompt. Query permission при запуске не вызывает новый запрос; `denied`/`unknown` не считаются `granted`, а отсутствие addon должно честно давать `unknown`.
 
 ## Автоматические проверки: команды и границы
 
@@ -47,7 +51,22 @@ npm audit
 
 Это команды для проверочного прогона, не утверждение, что они выполнены в рамках редактирования документации. Artifact-helper tests проверяют allowlist/checksums, а не GUI. В [package.json](<package.json>) нет отдельного `lint` script. Тесты приложения создают `dist-tests`, сборка — `dist`; устанавливать зависимости или создавать artifacts для одной лишь правки документации не требуется.
 
-| Проверка | Необходимое evidence | Статус этого документа |
+### Текущий preview: отдельное evidence
+
+| Проверка `0.1.1-preview.1` | Статус на этапе подготовки |
+| --- | --- |
+| Version/lock metadata | Версия изменена только в manifest и двух корневых version-полях lockfile; dependency graph должен оставаться прежним |
+| Artifact helper regressions | Локально 2026-11-09: RED 14/18 (prerelease fixtures Windows/macOS/Linux и real Linux config); GREEN 18/18, exit 0. `artifacts.mjs`: 100% lines/branches/functions. Старые stable-version и fail-closed gates сохранены |
+| Полный standalone typecheck/tests/build после source sync | Первичный standalone-прогон 2026-11-09: Node 24.19.0 / npm 11.17.0; typecheck PASS, desktop 303/303 (0 skipped) PASS, normal build PASS, всё exit 0; addon arm64 + x86_64, approved remote origin. После этого исправлена потеря параллельных macOS notification checks: shared passive read и exclusive explicit request без ослабления stale/revocation guards; дополнительный source suite 332/332 PASS. Lead независимо повторил финальный standalone-прогон после синхронизации: typecheck PASS, desktop 332/332 (0 skipped), helper 18/18 и normal/native build PASS, всё exit 0; helper coverage 100% lines/branches/functions. Это не packaging/installed/OS-consent acceptance |
+| Новый GitHub Actions run, четыре installers, hashes и публикация | NOT RUN / ещё нет evidence для этой версии |
+| Installed OS matrix / реальный IdP / first OS consent | NOT RUN |
+| Dependency audit 2026-11-09 | Lead: exit 1, шесть moderate, 0 high/critical; build-time `minimatch` advisory, не dependency-clean. Подробности ниже |
+
+### История `0.1.0` — не текущий preview
+
+Следующая таблица относится только к prepublication-прогону **2026-11-08 версии `0.1.0`**. Она намеренно сохраняет тогдашние counts и failures; не трактуйте её как проверку нового addon, consent flow или hotkey fix.
+
+| Проверка | Необходимое evidence | Исторический результат `0.1.0` |
 | --- | --- | --- |
 | Locked install на Node 24 | Версии Node/npm, `npm ci` exit code, неизменный lockfile | Локально 2026-11-08: PASS, Node 24.19.0 / npm 11.17.0, exit 0; lockfile не изменён |
 | Typecheck | `npm run typecheck` exit code | Локально 2026-11-08: PASS, exit 0 |
@@ -80,7 +99,7 @@ Windows остановился на загрузке native Electron с HTTP 504
 
 ### Известная оговорка dependency audit
 
-На 2026-11-08 при отдельной проверке `npm audit --json` зафиксирован exit code **1**: шесть affected dependency nodes уровня **moderate**, без high/critical. Корневой advisory — [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) для `minimatch`; шесть nodes не означают шесть независимых уязвимостей.
+Исторический audit `0.1.0` от 2026-11-08: `npm audit --json`, exit code **1**, шесть affected dependency entries уровня **moderate**, без high/critical. Отдельный повтор Lead от **2026-11-09** также завершился с exit **1**: `moderate: 6`, `high: 0`, `critical: 0`, `total: 6`. Это актуальная отдельная проверка, не перенос старого PASS. Корневой advisory — [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) для `minimatch`; шесть nodes не означают шесть независимых уязвимостей.
 
 [Manifest](<package.json>) содержит инструменты как devDependencies. В [lockfile](<package-lock.json>) подтверждены `electron-builder 26.18.0` → `app-builder-lib 26.18.0` → `minimatch ^10.2.5`, resolved `10.2.6`, и build-time ветка `@electron/universal`. Это оговорка для цепочки сборки, а не доказательство remote exploit в renderer или production npm dependency. Не следует называть зависимости «чистыми» или игнорировать риск CI. Обновление/override/`npm audit fix` в рамках этой документации не выполнялись; будущий audit нужно записать заново, не выдавая старый отчёт за текущий.
 
@@ -88,20 +107,23 @@ Windows остановился на загрузке native Electron с HTTP 504
 
 [Desktop workflow](<.github/workflows/desktop.yml>) настроен на стандартные native hosted runners `windows-2025`, `macos-15`, `ubuntu-24.04`, Node `24.19.0` и Actions, закреплённые commit SHA. Для macOS один packaging job создаёт два отдельных DMG: Apple Silicon и Intel. Это описание конфигурации, не утверждение об уже успешном GitHub Actions run.
 
-Ожидаемые файлы для версии `0.1.0`:
+Ожидаемые файлы **новой** версии `0.1.1-preview.1` (не старые artifacts `0.1.0`):
 
 ```text
-chat-desktop-spike-0.1.0-win-x64.exe
-chat-desktop-spike-0.1.0-mac-arm64.dmg
-chat-desktop-spike-0.1.0-mac-x64.dmg
-chat-desktop-spike-0.1.0-linux-x86_64.AppImage
+chat-desktop-spike-0.1.1-preview.1-win-x64.exe
+chat-desktop-spike-0.1.1-preview.1-mac-arm64.dmg
+chat-desktop-spike-0.1.1-preview.1-mac-x64.dmg
+chat-desktop-spike-0.1.1-preview.1-linux-x86_64.AppImage
+SHA256SUMS.txt
 ```
 
 Actions artifact называется `desktop-test-<platform>-<run_id>-<run_attempt>` и хранится 7 дней. [Helper](<scripts/artifacts.mjs>) запускается как `node scripts/artifacts.mjs windows` (либо `macos`/`linux`) после packaging. Каждый platform artifact сопровождается `SHA256SUMS.txt`. Сверьте checksum до установки; не принимайте произвольный zip каталога `release` как допустимую поставку. В artifacts не должны попадать unpacked app, debug/cache, исходники профилей, credentials или signing material.
 
 macOS CI ad-hoc signing используется только для теста: CLI overrides `mac.identity=-`, `mac.hardenedRuntime=false`, `mac.notarize=false` не меняют базовый hardened config. **Нет Developer ID и notarization; нет утверждения о Gatekeeper trust, OS notification popup или пригодности к production distribution.** Не отключайте системные защиты ради PASS. Windows test installer также не является обещанием trusted signing; Linux требует проверки фактического desktop environment и условий запуска AppImage.
 
-Artifacts — не GitHub Release и не автообновление. `publish: null` и `--publish never` запрещают публикацию из packaging; updater не подключён. Сборка обеих архитектур на одном macOS runner не доказывает запуск ни на Intel, ни на Apple Silicon.
+Actions artifacts — не GitHub Release и не автообновление. `publish: null` и `--publish never` запрещают публикацию из packaging; updater не подключён. Публичный prerelease — отдельный ручной шаг после проверки exact commit/run, ZIP contents/digests и SHA-256 всех четырёх installers. Он должен содержать только четыре installers и единый четырёхстрочный `SHA256SUMS.txt`, с `prerelease: true`, без статуса latest. [Ожидаемая страница preview](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.1) до публикации может возвращать 404; это ещё не evidence доступности файлов. Сборка обеих архитектур на одном macOS runner не доказывает запуск ни на Intel, ни на Apple Silicon.
+
+Перед macOS packaging проверьте [build-native prerequisites](<scripts/build-native.mjs>) и наличие universal `arm64`/`x86_64` addon. [Packaging config](<electron-builder.yml>) должен выносить `dist/notification-permission.node` в ASAR-unpacked; отдельно проверяйте подпись addon и приложения, ASAR allowlist и fuses. Packaging/подпись не подтверждают первый OS prompt.
 
 ## Ручная installed matrix
 
@@ -116,6 +138,9 @@ Artifacts — не GitHub Release и не автообновление. `publish
 | Cancel/deny/expiry и повторный login без embedded IdP fallback | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | Сессия после restart; logout/account switch не активирует старый account | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | Фокус/blur/minimize/hide, крестик, tray/menu/Dock, second instance | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| Cmd+M minimize, Cmd+H hide, Cmd+W close-to-hide, Cmd+Q Quit | N/A (macOS roles отсутствуют) | NOT RUN | NOT RUN | N/A (macOS roles отсутствуют) |
+| Явный native OS-consent: not-determined/granted/denied/unknown; настройки ОС | N/A (macOS consent flow) | NOT RUN | NOT RUN | N/A (macOS consent flow) |
+| Сохранённые preferences: обновление не сбрасывает выбор и не обещает startup offer | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | Реальное сообщение через адаптер сайта: одно OS notification вне активного чата | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | Повтор event ID, замена группы chat/call, TTL и expired click | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | Read/call end/selective dismiss, очистка, logout и account switch | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
@@ -125,7 +150,8 @@ Artifacts — не GitHub Release и не автообновление. `publish
 | Quit останавливает процесс и получение новых событий | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | Sleep/resume, renderer failure и восстановление без бесконечного reload | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | Same-origin download + save/cancel; Blob/P2P/external/redirect-chain deny | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| Browser notification/media/device/display/File System Access deny | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| macOS mic/camera: раздельное OS consent, all-of для mixed request; Win/Linux DENY | NOT RUN (DENY) | NOT RUN | NOT RUN | NOT RUN (DENY) |
+| Browser notification/device/display/File System Access deny | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | External HTTPS confirmation; опасные scheme/popup/iframe/IPC rejected | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | Badge: macOS count/reset; Windows/Linux не обещан | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 
@@ -135,9 +161,9 @@ Artifacts — не GitHub Release и не автообновление. `publish
 2. **Локальная диагностика.** В отдельной diagnostic-сборке или через `npm run spike` проверьте capabilities, set account, message/call, delayed event, duplicate, clear/logout и TTL. Клик должен приносить только валидный route. Локальный таймер не доказывает background delivery реальных сообщений.
 3. **Normal remote flow.** Вернитесь к обычной сборке. Подтвердите origin и работоспособность deployed frontend adapter. Если bridge не используется сайтом, отметьте зависимость deployment; не подменяйте проверку сообщений локальным spike. D3 selective dismissal должен проверяться реальным read/call state, не только наличием метода.
 4. **Вход.** Запустите login на совместимом сервере, проверьте отдельный системный браузер, ввод кода, показ правильного аккаунта и явное подтверждение. Проверьте cancel/deny/expiry, сетевую ошибку и неподдерживаемый сервер. Вход завершается только после проверки session и ACK; переход к IdP в Electron запрещён. Реальный IdP не считается принятым по mock-тестам.
-5. **Уведомления.** Проверьте banner и центр ОС отдельно при focus/blur/minimize/hide, Focus/DND и запрете ОС. `isSupported()`/`accepted: true` не равны показу. Проверьте warm click, expired click, restart, clear и смену account; старый toast не должен активировать чужой или истёкший route. Учитывайте best-effort history и ограничение снятия старых Windows toasts после restart.
-6. **Lifecycle.** Крестик скрывает окно, либо сворачивает при отсутствии tray на Windows/Linux. Окно можно вернуть. Quit завершает процесс; новые события после Quit не получаются. Возможная активация уже доставленного toast — отдельный OS-зависимый сценарий, не фоновое получение. После renderer failure показывается безопасная диагностика без bridge; resume не обещает доставку пропущенных событий.
-7. **Deny boundaries.** Камера/микрофон/display capture/device/browser notifications/File System Access отклоняются runtime policy. Same-origin HTTPS download допускается только при trusted frame/initiator и полностью same-origin redirect chain, с session и native save dialog. Blob, P2P и external downloads запрещены. Отдельно проверьте uploads/file picker/drag-and-drop; их успешность не заявлена. Entitlements и usage strings не являются media acceptance.
+5. **Уведомления.** Для macOS зафиксируйте OS status до/после явного opt-in, наличие addon и compatible frontend. Query на старте не должен вызывать новый OS prompt; при `not-determined` запрос инициируется явным действием, при `denied` не выдаёт фиктивное согласие, при `unknown` не записывает новый opt-in. Сохранённое решение/закрытое предложение не сбрасывается при обновлении; отсутствие нового startup offer в таком профиле само по себе не FAIL. Не сбрасывайте TCC или пользовательский профиль ради результата. Проверьте banner и центр ОС отдельно при focus/blur/minimize/hide, Focus/DND и запрете ОС. `isSupported()`/`accepted: true` не равны показу. Проверьте warm click, expired click, restart, clear и смену account; старый toast не должен активировать чужой или истёкший route. Учитывайте best-effort history и ограничение снятия старых Windows toasts после restart.
+6. **Lifecycle и hotkeys.** На macOS проверьте отдельно `Cmd+M` (minimize), `Cmd+H` (hide), `Cmd+W` (close-to-hide) и `Cmd+Q` (Quit), восстановление через Dock/menu. macOS roles не должны менять Windows/Linux. Крестик скрывает окно, либо сворачивает при отсутствии tray на Windows/Linux. Окно можно вернуть. Quit завершает процесс; новые события после Quit не получаются. Возможная активация уже доставленного toast — отдельный OS-зависимый сценарий, не фоновое получение. После renderer failure показывается безопасная диагностика без bridge; resume не обещает доставку пропущенных событий.
+7. **Media и deny boundaries.** На macOS в normal remote mode проверьте раздельный OS consent mic/camera, отказ одного устройства при mixed request и повторную проверку текущего main frame после ожидания. Согласие mic не даёт camera. На Windows/Linux mic/camera должны оставаться DENY. На всех ОС display capture/device/browser notifications/File System Access отклоняются; diagnostic mode не разрешает media. Same-origin HTTPS download допускается только при trusted frame/initiator и полностью same-origin redirect chain, с session и native save dialog. Blob, P2P и external downloads запрещены. Отдельно проверьте uploads/file picker/drag-and-drop; их успешность не заявлена. Entitlements и usage strings не являются media acceptance.
 8. **Security и privacy.** Проверьте отсутствие прямого bridge у iframe/чужого origin и отказ невалидным IPC/payload, запрет произвольных схем и embedded IdP. Внешний HTTPS открывается только после подтверждения. Журнал не содержит title/body; идентификаторы и session cookies всё равно требуют защиты и не публикуются вместе с evidence.
 
 ## Что остаётся за пределами принятого результата

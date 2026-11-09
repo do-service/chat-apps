@@ -7,10 +7,24 @@
 ## Границы проекта
 
 - В [app-config.json](<app-config.json>) закреплён origin `https://chat.exz-vps.ru`. Оболочка использует текущую развёрнутую версию этого сайта.
-- Экспортированный исходный срез включает D3-совместимый desktop bridge, в том числе выборочное снятие уведомлений. Это **не доказательство**, что соответствующий frontend-адаптер уже развёрнут на сайте. Исходники и deployment сайта — отдельные поставки; эта задача не развёртывает сайт.
+- Desktop bridge поддерживает выборочное снятие уведомлений и явное macOS-согласие на native notifications. Для полного сценария нужны **обе поставки**: новая оболочка с native addon и совместимый развёрнутый frontend-адаптер. Этот репозиторий не содержит и не развёртывает сайт; состав desktop-сборки не доказывает версию remote frontend или end-to-end результат.
 - Локальный `--spike` — диагностика уведомлений и lifecycle с искусственными событиями, не offline-версия Chat и не проверка реальных сообщений.
-- Сохраняются существующие имя `Chat Desktop Spike`, npm package `chat-desktop-spike`, версия `0.1.0` и app ID `ru.exz-vps.chat.desktop.spike`.
+- Версия preview — `0.1.1-preview.1`. Сохраняются существующие имя `Chat Desktop Spike`, npm package `chat-desktop-spike`, app ID `ru.exz-vps.chat.desktop.spike` и профиль/session partition. Обновление не сбрасывает сохранённые предпочтения пользователя.
 - Публичная доступность репозитория не выдаёт open-source лицензию. В [package.json](<package.json>) остаются `license: UNLICENSED` и `private: true`; последнее запрещает случайную npm-публикацию, а не определяет видимость репозитория.
+
+## Preview и загрузки
+
+Готовится публичный **`v0.1.1-preview.1`**, не production-релиз. На момент подготовки этой документации публикация и новая CI-сборка **ещё не подтверждены**. [Страница prerelease](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.1) и прямые ссылки ниже — **ожидаемые адреса после публикации**, до неё могут возвращать 404. Не подменяйте эту версию старыми Actions artifacts `0.1.0`; `/releases/latest` не является адресом preview.
+
+| Платформа | Ожидаемый installer |
+| --- | --- |
+| Windows x64 | [NSIS .exe](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/chat-desktop-spike-0.1.1-preview.1-win-x64.exe) |
+| macOS Apple Silicon | [DMG arm64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/chat-desktop-spike-0.1.1-preview.1-mac-arm64.dmg) |
+| macOS Intel | [DMG x64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/chat-desktop-spike-0.1.1-preview.1-mac-x64.dmg) |
+| Linux x64 | [AppImage x86_64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/chat-desktop-spike-0.1.1-preview.1-linux-x86_64.AppImage) |
+| Контрольные суммы | [SHA256SUMS.txt — все четыре installer](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/SHA256SUMS.txt) |
+
+Сверьте SHA-256 до установки. Preview не имеет доверенной Windows-подписи; macOS использует ad-hoc signing, **без Developer ID и notarization**. Возможны SmartScreen/Gatekeeper warnings или отказ запуска. Не отключайте защиты ОС ради запуска; зафиксируйте отказ как ограничение. Updater не подключён, обновление — вручную.
 
 ## Инструменты и локальная проверка
 
@@ -37,6 +51,8 @@ npm start
 ```
 
 `npm ci` устанавливает locked-зависимости; отдельный `require('electron')` завершает lazy download Electron последовательно, до параллельных тестов. `npm test` компилирует тесты в `dist-tests`, `npm run build` — приложение в `dist`; `npm start` повторяет сборку и открывает remote-сайт. Отдельного `lint` script в manifest нет. Не используйте обычный Node.js запуск вместо Electron для приложения.
+
+На macOS build дополнительно компилирует [native addon](<native/notification-permission.mm>) через [build-native script](<scripts/build-native.mjs>): нужны установленные Command Line Tools/macOS SDK, `clang++` и локальные Node-API headers (`node_api.h`). При нестандартном расположении headers задайте `NODE_API_INCLUDE` на установленный include-каталог. Script не скачивает headers и завершает build ошибкой, если prerequisites отсутствуют. Addon — универсальный `arm64` + `x86_64`, Node-API 8, без новых npm dependencies; в пакете он лежит вне ASAR как `dist/notification-permission.node`. На Windows/Linux этот macOS addon не собирается.
 
 Обычная сборка встраивает origin из [app-config.json](<app-config.json>). Необязательный `DESKTOP_APP_URL` переопределяет его при сборке или запуске; разрешён только HTTPS origin без credentials, пути, query и fragment. Смена origin создаёт отдельный session-профиль, а не переносит существующий вход. Без валидного origin normal mode завершается ошибкой, а не незаметно переключается в локальную диагностику. Правила — в [src/config.ts](<src/config.ts>) и [scripts/build.mjs](<scripts/build.mjs>).
 
@@ -65,6 +81,8 @@ npm run package:spike
 | [src/notification-store.ts](<src/notification-store.ts>) | Локальный журнал metadata без title/body уведомлений |
 | [src/desktop-auth.ts](<src/desktop-auth.ts>), [src/electron-auth.ts](<src/electron-auth.ts>) | System-browser login, isolated auth attempt и установка/проверка session cookie |
 | [src/lifecycle.ts](<src/lifecycle.ts>) | Восстановление скрытого окна после завершения renderer |
+| [src/notification-permission.ts](<src/notification-permission.ts>), [native addon](<native/notification-permission.mm>) | macOS query/request notification permission в main process; отказ/неизвестность не считаются согласием |
+| [src/media-permissions.ts](<src/media-permissions.ts>) | Отдельное macOS OS-consent для микрофона и камеры только доверенного live main frame |
 
 Remote renderer работает с sandbox/context isolation, без Node integration и webview. Bridge инъецируется только в trusted top-level frame; main отдельно проверяет источник и аргументы IPC. Чужие origin/IdP нельзя открывать внутри окна. Внешняя HTTPS-ссылка может быть открыта в системном браузере только после подтверждения; cookies приложения туда не передаются.
 
@@ -75,9 +93,15 @@ Remote renderer работает с sandbox/context isolation, без Node integ
 - Native API support и принятие запроса не гарантируют banner, звук, центр уведомлений или callback ОС. Влияют разрешения, Focus/DND, desktop environment и signing/identity.
 - Журнал хранит идентификаторы account/event/chat/call, TTL и OS metadata, но не title/body. Он не является архивом сообщений и всё равно содержит чувствительные идентификаторы; Electron session отдельно хранит cookies сайта.
 - Уведомления привязаны к account, дедуплицируются по event ID, заменяются в группе chat/call и ограничены TTL/лимитами. Badge сейчас доступен только на macOS.
-- Крестик скрывает окно; при отсутствии tray на Windows/Linux окно сворачивается. Tray/menu/Dock позволяют вернуть окно. Получение событий зависит от живого renderer и подключения сайта.
+- На macOS `Cmd+M` использует стандартную menu role `minimize`, `Cmd+H` — `hide`; это разные действия, не глобальные hotkeys. `Cmd+W`/крестик скрывают окно, `Cmd+Q` завершает приложение. На Windows/Linux крестик скрывает окно, а при отсутствии tray — сворачивает; macOS roles туда не добавляются. Tray/menu/Dock позволяют вернуть окно. Получение событий зависит от живого renderer и подключения сайта.
 - **«Выход» / Quit завершает процесс и получение новых событий.** Background push/service после Quit не реализован. Activation уже доставленного уведомления после restart — отдельный best-effort сценарий, не гарантия cold-start на каждой ОС.
 - macOS history restoration — best effort. На Windows отсутствует публичный remove-by-ID для старого toast, объект которого потерян после restart; видимый stale toast может остаться, но не должен вести в чужой/истёкший route.
+
+### Явное macOS-согласие на уведомления
+
+Совместимый frontend запрашивает native permission только после явного действия пользователя — например, включения уведомлений в настройках. Main проверяет текущий trusted document/account и foreground-окно; addon читает/запрашивает разрешение через macOS UserNotifications. Query при запуске не вызывает новый OS prompt. Только фактический `granted` допускает отправку через новый macOS flow; отсутствие addon, timeout или ошибка дают `unknown`, а не фиктивное согласие. При `denied` совместимый UI может предложить открыть настройки уведомлений ОС.
+
+**Обновление не гарантирует новый startup offer или первый системный диалог.** Сохранённые «включено», «выключено» или закрытое предложение остаются в прежнем профиле; frontend учитывает их при onboarding. Уже принятый/запрещённый OS consent также не обязан показывать повторный диалог. Смена версии не создаёт новую app identity. Windows/Linux не получают этот macOS consent API и не объявляют OS permission `granted` по одному `isSupported()`.
 
 ### Вход через системный браузер
 
@@ -85,9 +109,11 @@ Production auth требует совместимого сервера: `/auth/d
 
 Переход `/auth/login` может запускать эту процедуру для совместимости, но embedded OAuth/IdP fallback запрещён. Наличие кода не доказывает доступность server endpoints или успешность реального IdP: это отдельная ещё не принятая проверка.
 
-### Media и файлы: текущая deny policy
+### Media и файлы: разрешённый минимум и deny boundaries
 
-[Session policy](<src/main.ts#L194-L219>) отказывает browser permissions, device permissions, display capture и File System Access. **Камера, микрофон, screen sharing и media-звонки не приняты и сейчас заблокированы**; macOS usage descriptions/entitlements не отменяют runtime deny.
+[Session policy](<src/main.ts>) и [media policy](<src/media-permissions.ts>) допускают микрофон и камеру **только на macOS**, в обычной remote-сборке, по запросу текущего trusted HTTPS main frame и после отдельного OS consent каждого устройства. Согласие на микрофон не даёт доступ к камере; комбинированный запрос требует оба разрешения и повторную проверку актуальности документа. Это реализация policy, **не приёмка реального звонка/камеры**.
+
+**Windows/Linux: микрофон и камера остаются DENY.** На всех платформах browser notifications, device permissions, screen sharing/display capture и File System Access запрещены; diagnostic mode не даёт media-доступ. Usage descriptions/entitlements сами по себе ничего не разрешают.
 
 Скачивание допускается только из trusted main frame с same-origin initiator и HTTPS URL, если вся redirect chain остаётся в trusted origin. Используются session приложения и native save dialog. **Blob/P2P/external-origin downloads запрещены**; это не обещание поддержки всех вложений. Uploads, drag-and-drop и системные file-picker сценарии требуют отдельной приёмки.
 
@@ -102,7 +128,7 @@ npm run package:linux     # Linux: AppImage x64
 npm run package:dir       # распакованное приложение текущей ОС
 ```
 
-Результат появляется в `release`. Базовое имя: `chat-desktop-spike-0.1.0-<os>-<arch>.<ext>`. Для публичного распространения эти команды сами по себе недостаточны: нужны отдельные решения о signing, notarization и установленная OS-приёмка.
+Результат появляется в `release`. Базовое имя: `chat-desktop-spike-0.1.1-preview.1-<os>-<arch>.<ext>` (Linux x64 расширяется packager-ом как `x86_64`). Для публичного распространения эти команды сами по себе недостаточны: нужны отдельные решения о signing, notarization и установленная OS-приёмка.
 
 [Desktop CI](<.github/workflows/desktop.yml>) предназначен для тестовых native-сборок на стандартных hosted runners:
 
@@ -117,12 +143,12 @@ CI выполняет locked install, последовательную иниц�
 
 Проверка обеих macOS архитектур в packaging не заменяет запуск на обоих типах Mac. macOS CI использует **ad-hoc signing только для теста**, без Developer ID и notarization. CLI overrides `mac.identity=-`, `mac.hardenedRuntime=false`, `mac.notarize=false` относятся только к тестовому job; базовая конфигурация с `hardenedRuntime: true` не меняется. Это не обход Gatekeeper и не подтверждение допуска/показа уведомлений ОС.
 
-Workflow создаёт Actions artifacts `desktop-test-<platform>-<run_id>-<run_attempt>` со сроком хранения **7 дней** для ручной проверки, **не GitHub Release**. Автоматическая публикация отключена (`publish: null`, `--publish never`), updater не подключён. Download artifact из CI не означает, что приложение принято или безопасно для production. Не добавляйте signing keys, cookies, `.env`, локальные профили или credentials в artifacts.
+Workflow создаёт Actions artifacts `desktop-test-<platform>-<run_id>-<run_attempt>` со сроком хранения **7 дней** для ручной проверки, **не GitHub Release**. Публичный preview публикуется отдельным ручным release-шагом только после проверки новой сборки и всех четырёх installers/checksums; сам workflow не создаёт Release. Автоматическая публикация отключена (`publish: null`, `--publish never`), updater не подключён. Download artifact из CI не означает, что приложение принято или безопасно для production. Не добавляйте signing keys, cookies, `.env`, локальные профили или credentials в artifacts.
 
 ## Приёмка и известные риски
 
 [ACCEPTANCE.md](<ACCEPTANCE.md>) разделяет исходные факты, команды автоматической проверки и ручную matrix. До заполнения evidence остаются непринятыми installed Windows/macOS/Linux, реальный IdP/system-browser flow, сайт с нужным frontend adapter и фактические OS notifications. Автоматические тесты не заменяют эти проверки.
 
-Известная оговорка: отдельный audit от 2026-11-08 сообщил moderate advisory [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) в build-time цепочке `minimatch` через packaging tools; high/critical не зафиксированы. Manifest и lock подтверждают devDependency-цепочку; это не утверждение об exploit в renderer. Подробности — в [ACCEPTANCE.md](<ACCEPTANCE.md>). Исправление/override зависимостей здесь не выполнялись. Audit нужно повторять отдельно; закреплённые версии и отсутствие production npm dependencies не означают «уязвимостей нет».
+Известная оговорка: отдельные audit от 2026-11-08 и 2026-11-09 сообщили moderate advisory [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) в build-time цепочке `minimatch` через packaging tools; high/critical не зафиксированы. Manifest и lock подтверждают devDependency-цепочку; это не утверждение об exploit в renderer. Подробности — в [ACCEPTANCE.md](<ACCEPTANCE.md>). Исправление/override зависимостей здесь не выполнялись. Audit нужно повторять отдельно; закреплённые версии и отсутствие production npm dependencies не означают «уязвимостей нет».
 
-Документация сверена с экспортированными исходниками и конфигурацией 2026-11-08. Она не переносит результаты прежних запусков и не служит протоколом production deployment.
+Документация подготовлена для исходного среза preview 2026-11-09. Исторические результаты `0.1.0` не являются результатами этой версии; актуальные проверки и ещё не выполненная release/installed-приёмка разделены в [ACCEPTANCE.md](<ACCEPTANCE.md>). Это не протокол production deployment.

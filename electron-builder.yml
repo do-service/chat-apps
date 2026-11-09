@@ -1,6 +1,8 @@
 appId: ru.exz-vps.chat.desktop.spike
 productName: Chat Desktop Spike
 asar: true
+asarUnpack:
+  - dist/notification-permission.node
 electronFuses:
   runAsNode: false
   enableNodeOptionsEnvironmentVariable: false

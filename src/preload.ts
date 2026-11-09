@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
-  BRIDGE_VERSION, IPC, isAuthState, isBadgeCount, isIdentifier, isLoginRequest, isNotificationDismissal, isNotificationKey, isNotificationRequest,
+  BRIDGE_VERSION, IPC, isAuthState, isBadgeCount, isIdentifier, isLoginRequest, isNativeNotificationPermission, isNotificationDismissal, isNotificationKey, isNotificationRequest,
   type DesktopBridge,
 } from "./contract";
 import {
@@ -20,6 +20,17 @@ if (process.isMainFrame && window.top === window && trustedOrigin
       if (!isCapabilities(result)) throw new Error("Invalid desktop capabilities");
       return result;
     },
+    async getNotificationPermission() {
+      const result: unknown = await ipcRenderer.invoke(IPC.getNotificationPermission);
+      if (!isNativeNotificationPermission(result)) throw new Error("Invalid notification permission");
+      return result;
+    },
+    async requestNotificationPermission() {
+      const result: unknown = await ipcRenderer.invoke(IPC.requestNotificationPermission);
+      if (!isNativeNotificationPermission(result)) throw new Error("Invalid notification permission");
+      return result;
+    },
+    async openNotificationSettings() { await ipcRenderer.invoke(IPC.openNotificationSettings); },
     async getAuthState() {
       const result: unknown = await ipcRenderer.invoke(IPC.getAuthState);
       if (!isAuthState(result)) throw new Error("Invalid desktop auth state");

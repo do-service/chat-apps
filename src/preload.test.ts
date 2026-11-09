@@ -10,14 +10,14 @@ const compiled = spawnSync(process.execPath, ["--input-type=module", "-e",
 ], { encoding: "utf8" });
 assert.equal(compiled.status, 0, compiled.stderr);
 
-function fixture(mainFrame = true, origin = "https://chat.example") {
+function fixture(mainFrame = true, origin = "https://chat.example", response: unknown = undefined) {
   const calls: { channel: string; value: unknown }[] = [];
   let exposed: unknown;
   const window = { location: { origin, href: `${origin}/` }, top: {} };
   window.top = window;
   const electron = {
     contextBridge: { exposeInMainWorld: (_name: string, bridge: unknown) => { exposed = bridge; } },
-    ipcRenderer: { invoke: async (channel: string, value: unknown) => { calls.push({ channel, value }); } },
+    ipcRenderer: { invoke: async (channel: string, value: unknown) => { calls.push({ channel, value }); return response; } },
   };
   runInNewContext(compiled.stdout, {
     require: (name: string) => {
@@ -50,6 +50,20 @@ test("preload exposes additive dismiss operation with strict validation before I
     await assert.rejects(async () => dismiss(selector));
   }
   assert.equal(f.calls.length, accepted);
+});
+
+test("preload exposes permission methods and validates every permission result", async () => {
+  for (const result of ["not-determined", "granted", "denied", "unknown", "restricted", true, null, {}]) {
+    const f = fixture(true, "https://chat.example", result);
+    assert.ok(contract.isRecord(f.bridge));
+    for (const name of ["getNotificationPermission", "requestNotificationPermission"]) {
+      const method: unknown = f.bridge[name]; assert.ok(typeof method === "function", name);
+      if (typeof result === "string" && ["not-determined", "granted", "denied", "unknown"].includes(result)) {
+        assert.equal(await method(), result);
+      } else await assert.rejects(async () => method(), /Invalid notification permission/);
+    }
+    assert.equal(typeof f.bridge.openNotificationSettings, "function");
+  }
 });
 
 test("preload does not expose dismiss or any bridge to foreign pages/subframes", () => {

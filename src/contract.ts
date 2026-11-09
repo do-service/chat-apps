@@ -3,6 +3,9 @@ export const APP_ID = "ru.exz-vps.chat.desktop.spike";
 export const IPC = {
   capabilities: "chat-desktop:v1:capabilities",
   getAuthState: "chat-desktop:v1:get-auth-state",
+  getNotificationPermission: "chat-desktop:v1:get-notification-permission",
+  requestNotificationPermission: "chat-desktop:v1:request-notification-permission",
+  openNotificationSettings: "chat-desktop:v1:open-notification-settings",
   beginLogin: "chat-desktop:v1:begin-login",
   cancelLogin: "chat-desktop:v1:cancel-login",
   setAccount: "chat-desktop:v1:set-account",
@@ -17,6 +20,11 @@ export const IPC = {
 
 export type Platform = "darwin" | "win32" | "linux";
 export type NotificationKind = "message" | "call" | "test";
+export type NativeNotificationPermission = "unknown" | "not-determined" | "granted" | "denied";
+
+export function isNativeNotificationPermission(value: unknown): value is NativeNotificationPermission {
+  return value === "unknown" || value === "not-determined" || value === "granted" || value === "denied";
+}
 export type NotificationRoute = {
   chatId: string;
   callId?: string;
@@ -64,6 +72,9 @@ export type DesktopBridge = {
   version: typeof BRIDGE_VERSION;
   getCapabilities(): Promise<DesktopCapabilities>;
   getAuthState(): Promise<DesktopAuthState>;
+  getNotificationPermission?(): Promise<NativeNotificationPermission>;
+  requestNotificationPermission?(): Promise<NativeNotificationPermission>;
+  openNotificationSettings?(): Promise<void>;
   beginLogin(request: DesktopLoginRequest): Promise<DesktopAuthState>;
   cancelLogin(): Promise<void>;
   setAccount(accountId: string | null): Promise<void>;
