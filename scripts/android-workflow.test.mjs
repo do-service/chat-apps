@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const workflow = await readFile(new URL('../.github/workflows/android.yml', import.meta.url), 'utf8');
 
@@ -16,7 +19,8 @@ function assertPolicy(text) {
   assert.match(text, /    runs-on: ubuntu-24\.04\n/);
   assert.match(text, /node-version: "24\.19\.0"/);
   assert.match(text, /java-version: "21"/);
-  assert.match(text, /sdkmanager --install "platforms;android-36" "build-tools;36\.0\.0"/);
+  assert.match(text, /"\$ANDROID_HOME\/cmdline-tools\/latest\/bin\/sdkmanager" --install "platforms;android-36" "build-tools;36\.0\.0"/);
+  assert.match(text, /test -f "\$ANDROID_HOME\/platforms\/android-36\/android\.jar"/);
   const actions = [...text.matchAll(/^\s+uses: (\S+)(?:\s+#.*)?$/gm)].map(match => match[1]);
   assert.equal(actions.length, 4);
   assert.ok(actions.every(action => /^actions\/(?:checkout|setup-node|setup-java|upload-artifact)@[0-9a-f]{40}$/.test(action)));
@@ -74,4 +78,63 @@ for (const [name, before, after] of [
 
 test('policy rejects a GitLab credential added to a later build step', () => {
   assert.throws(() => assertPolicy(workflow.replace('      - name: Install only the exported locked dependencies\n', '      - name: Install only the exported locked dependencies\n        env:\n          EXTRA: ${{ secrets.GITLAB_READ_TOKEN }}\n')));
+});
+
+function sdkScript() {
+  const block = workflow.split('      - name: Ensure the pinned Android SDK packages\n')[1]?.split('\n      - name: ')[0];
+  assert.ok(block);
+  return block.split('        run: |\n')[1].split('\n').map(line => line.startsWith('          ') ? line.slice(10) : line).join('\n');
+}
+
+async function sdkFixture(t) {
+  const parent = await realpath(tmpdir());
+  const root = await realpath(await mkdtemp(path.join(parent, 'android-sdk-policy-')));
+  t.after(async () => {
+    assert.equal(path.dirname(await realpath(root)), parent);
+    assert.ok(path.basename(root).startsWith('android-sdk-policy-'));
+    await rm(root, { recursive: true });
+  });
+  const sdk = path.join(root, 'sdk fixture');
+  await mkdir(sdk);
+  return sdk;
+}
+
+async function pinnedSdk(sdk) {
+  await mkdir(path.join(sdk, 'platforms/android-36'), { recursive: true });
+  await mkdir(path.join(sdk, 'build-tools/36.0.0'), { recursive: true });
+  await writeFile(path.join(sdk, 'platforms/android-36/android.jar'), 'synthetic SDK fixture, not a real jar');
+  for (const tool of ['apksigner', 'aapt']) await writeFile(path.join(sdk, 'build-tools/36.0.0', tool), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+}
+
+function runSdk(sdk) {
+  return spawnSync('/bin/bash', ['--noprofile', '--norc', '-eu', '-o', 'pipefail', '-c', sdkScript()], {
+    env: { PATH: '/usr/bin:/bin', HOME: sdk, BASH_ENV: '/dev/null', ANDROID_HOME: sdk }, encoding: 'utf8', timeout: 10000,
+  });
+}
+
+test('preinstalled pinned SDK does not require sdkmanager on PATH', async t => {
+  const sdk = await sdkFixture(t);
+  await pinnedSdk(sdk);
+  const result = runSdk(sdk);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('missing pinned SDK uses explicit CLI path and does not fall back to another API', async t => {
+  const sdk = await sdkFixture(t);
+  await mkdir(path.join(sdk, 'platforms/android-35'), { recursive: true });
+  await writeFile(path.join(sdk, 'platforms/android-35/android.jar'), 'wrong API fixture');
+  const bin = path.join(sdk, 'cmdline-tools/latest/bin');
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, 'sdkmanager'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$ANDROID_HOME/args.txt"\nexit 23\n', { mode: 0o755 });
+  const result = runSdk(sdk);
+  assert.equal(result.status, 23, result.stderr);
+  assert.deepEqual((await readFile(path.join(sdk, 'args.txt'), 'utf8')).trim().split('\n'), ['--install', 'platforms;android-36', 'build-tools;36.0.0']);
+});
+
+test('SDK installer success cannot replace required pinned package files', async t => {
+  const sdk = await sdkFixture(t);
+  const bin = path.join(sdk, 'cmdline-tools/latest/bin');
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, 'sdkmanager'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  assert.equal(runSdk(sdk).status, 1);
 });

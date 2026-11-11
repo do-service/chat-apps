@@ -63,7 +63,11 @@ jobs:
       - name: Ensure the pinned Android SDK packages
         run: |
           test -n "${ANDROID_HOME:-}"
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+          if ! test -f "$ANDROID_HOME/platforms/android-36/android.jar" || ! test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" || ! test -x "$ANDROID_HOME/build-tools/36.0.0/aapt"; then
+            test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0"
+          fi
+          test -f "$ANDROID_HOME/platforms/android-36/android.jar"
           test -x "$ANDROID_HOME/build-tools/36.0.0/apksigner"
           test -x "$ANDROID_HOME/build-tools/36.0.0/aapt"
 
