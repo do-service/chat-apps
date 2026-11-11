@@ -191,7 +191,7 @@ export async function exportSource(destination, { env = process.env, run = stock
     };
     const config = [
       "protocol.version=2", "protocol.allow=never", "protocol.https.allow=always",
-      "credential.helper=", "credential.interactive=false", "credential.useHttpPath=true",
+      "credential.helper=", "credential.useHttpPath=true",
       "http.followRedirects=false", "http.sslVerify=true", "http.proxy=", "http.saveCookies=false",
       "http.lowSpeedLimit=1024", "http.lowSpeedTime=20", "http.maxRequests=1",
       "core.hooksPath=/dev/null", "core.attributesFile=/dev/null", "core.fsmonitor=false",

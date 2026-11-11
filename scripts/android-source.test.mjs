@@ -132,6 +132,57 @@ test("stock Git exports only selected blobs, one tip commit, no checkout or attr
   for (const call of f.calls) await assert.rejects(lstat(call.options.env.HOME), { code: "ENOENT" });
 });
 
+test("stock Git credential fill uses controlled askpass without terminal prompts", async (t) => {
+  const f = await fixture(t);
+  const fills = [];
+  let noAskpass;
+  const alternate = { GITLAB_READ_USERNAME: "alternate-fixture-user", GITLAB_READ_TOKEN: "alternate-fixture-token" };
+  const run = async (args, options) => {
+    if (args.includes("ls-remote")) {
+      assert.equal(options.env.GIT_TERMINAL_PROMPT, "0");
+      assert.deepEqual(options.stdio, ["pipe", "pipe", "pipe"]);
+      const config = args.slice(0, args.indexOf("ls-remote"));
+      assert.ok(config.includes("credential.helper="));
+      for (const credentials of [fakeCredentials, alternate]) {
+        const result = spawnSync("git", [...config, "credential", "fill"], {
+          ...options,
+          env: { ...options.env, ...credentials },
+          input: "protocol=https\nhost=gitlab.exz-vps.ru\npath=fullstack/chat.git\n\n",
+          timeout: 5000,
+        });
+        fills.push({ result, credentials });
+        if (result.status !== 0) throw new Error("Controlled fixture askpass failed");
+      }
+      noAskpass = spawnSync("git", [...config, "credential", "fill"], {
+        ...options,
+        env: { ...options.env, GIT_ASKPASS: "/dev/null" },
+        input: "protocol=https\nhost=gitlab.exz-vps.ru\npath=fullstack/chat.git\n\n",
+        timeout: 5000,
+      });
+    }
+    return f.run(args, options);
+  };
+  let failure;
+  await exportSource(f.dest, { env: f.env, run }).catch((error) => { failure = error; });
+  assert.ok(fills.length > 0);
+  for (const { result, credentials } of fills) {
+    assert.equal(result.status, 0, "Stock Git must allow controlled askpass with terminal prompting disabled");
+    assert.equal(result.error, undefined);
+    assert.equal(result.stderr.length, 0);
+    const fields = Object.fromEntries(result.stdout.toString().trimEnd().split("\n").map((line) => {
+      const index = line.indexOf("=");
+      return [line.slice(0, index), line.slice(index + 1)];
+    }));
+    assert.equal(fields.username, credentials.GITLAB_READ_USERNAME);
+    assert.equal(fields.password, credentials.GITLAB_READ_TOKEN);
+  }
+  assert.ifError(failure);
+  assert.equal(fills.length, 2, "The same askpass script must use credentials from each child environment");
+  assert.equal(noAskpass.error, undefined);
+  assert.notEqual(noAskpass.status, 0, "Missing askpass must fail rather than fall back to terminal prompting");
+  assert.match(noAskpass.stderr.toString(), /terminal prompts disabled/);
+});
+
 test("ordinary dotfiles, shared blobs and empty files are materialized without extra fetches", async (t) => {
   const f = await fixture(t, { extra: { "frontend/.gitignore": "node_modules\n", "mobile/.gitignore": "node_modules\n", "mobile/empty": "" } });
   const result = await exportSource(f.dest, { env: f.env, run: f.run });
