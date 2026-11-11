@@ -145,6 +145,10 @@ CI выполняет locked install, последовательную иниц�
 
 Workflow создаёт Actions artifacts `desktop-test-<platform>-<run_id>-<run_attempt>` со сроком хранения **7 дней** для ручной проверки, **не GitHub Release**. Публичный preview публикуется отдельным ручным release-шагом только после проверки новой сборки и всех четырёх installers/checksums; сам workflow не создаёт Release. Автоматическая публикация отключена (`publish: null`, `--publish never`), updater не подключён. Download artifact из CI не означает, что приложение принято или безопасно для production. Не добавляйте signing keys, cookies, `.env`, локальные профили или credentials в artifacts.
 
+## Android debug APK
+
+Отдельный [manual Android workflow](<.github/workflows/android.yml>) собирает тестовый APK на Linux runner из проверенного frontend/mobile snapshot GitLab, без публикации backend, истории или raw source archive. Инструкции, доступ только из `main`, Secrets, точный artifact allowlist и ограничения debug-подписи — в [Android CI](<ANDROID_CI.md>). Этот job не меняет desktop-сборку и не публикует Release/Google Play. Успех локальных helper-тестов сам по себе не означает, что APK уже собран.
+
 ## Приёмка и известные риски
 
 [ACCEPTANCE.md](<ACCEPTANCE.md>) разделяет исходные факты, команды автоматической проверки и ручную matrix. До заполнения evidence остаются непринятыми installed Windows/macOS/Linux, реальный IdP/system-browser flow, сайт с нужным frontend adapter и фактические OS notifications. Автоматические тесты не заменяют эти проверки.
