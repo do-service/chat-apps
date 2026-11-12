@@ -434,6 +434,10 @@ def inspect_apk(candidate, source_files, native_assets):
         require(required | expected.keys() <= files.keys(), "APK assets/package incomplete")
         for name, info in files.items():
             if not (name in expected or name in VERIFIED_SDK_MEMBERS or name in EMPTY_CORDOVA or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or package_member(name)):
+                namespace = name.split("/", 1)[0] if "/" in name else ""
+                namespace = namespace if namespace in {"assets", "res", "META-INF", "kotlin", "lib"} else ("root" if not namespace else "other")
+                shape = "generated-xml" if namespace == "res" and "$" in name.rsplit("/", 1)[-1] and name.endswith(".xml") else "other"
+                print(f"android-artifact: rejected-member namespace={namespace} path-sha256={hashlib.sha256(name.encode()).hexdigest()} bytes={info.file_size} shape={shape}", file=sys.stderr)
                 for diagnostic_name in REJECTED_SDK_DIAGNOSTICS:
                     if diagnostic_name in files and diagnostic_name not in VERIFIED_SDK_MEMBERS:
                         diagnose_rejected_sdk_member(archive, files[diagnostic_name])
@@ -554,7 +558,11 @@ def main(argv=None):
         prepare(**vars(args))
         print(json.dumps({"files": sorted(OUTPUT_NAMES)}, separators=(",", ":")))
         return 0
-    except (VerificationError, OSError, ValueError, TypeError, KeyError):
+    except VerificationError as error:
+        print("android-artifact: reason-sha256=" + hashlib.sha256(str(error).encode()).hexdigest(), file=sys.stderr)
+        print("android-artifact: verification failed; no public artifact was accepted", file=sys.stderr)
+        return 1
+    except (OSError, ValueError, TypeError, KeyError):
         print("android-artifact: verification failed; no public artifact was accepted", file=sys.stderr)
         return 1
 

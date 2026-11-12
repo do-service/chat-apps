@@ -191,7 +191,7 @@ class ArtifactTests(unittest.TestCase):
         with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", expected), contextlib.redirect_stderr(io.StringIO()) as stderr:
             with self.assertRaisesRegex(artifact.VerificationError, "^unexpected APK member$"):
                 self.prepare()
-        self.assertEqual(stderr.getvalue(), "android-artifact: phase=source-bundle-ok\n")
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-member namespace=assets path-sha256=" + hashlib.sha256(b"assets/UnknownCustomerValue.bin").hexdigest() + " bytes=17 shape=other"])
         self.assertFalse(self.output.exists())
         self.assertEqual(self.sdk_calls.call_count, 0)
 
@@ -254,7 +254,7 @@ class ArtifactTests(unittest.TestCase):
         with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {name: (len(data), hashlib.sha256(data).hexdigest())}, create=True), contextlib.redirect_stderr(io.StringIO()) as stderr:
             with self.assertRaisesRegex(artifact.VerificationError, "^unexpected APK member$"):
                 self.prepare()
-        expected = ["android-artifact: phase=source-bundle-ok"]
+        expected = ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-member namespace=assets path-sha256=" + hashlib.sha256(b"assets/UnknownCustomerValue.bin").hexdigest() + " bytes=17 shape=other"]
         for path, payload in protos:
             identifier = "firebase-messaging-event-proto" if path == "messaging_event.proto" else "firebase-messaging-event-extension-proto"
             expected.append(f"android-artifact: rejected-sdk-candidate id={identifier} bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()}")
@@ -274,7 +274,7 @@ class ArtifactTests(unittest.TestCase):
                 with self.assertRaisesRegex(artifact.VerificationError, "^unexpected APK member$"):
                     self.prepare()
             self.assertEqual(stdout.getvalue(), "")
-            self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", f"android-artifact: rejected-sdk-candidate id={identifier} bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()}"])
+            self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", f"android-artifact: rejected-member namespace=root path-sha256={hashlib.sha256(name.encode()).hexdigest()} bytes={len(payload)} shape=other", f"android-artifact: rejected-sdk-candidate id={identifier} bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()}"])
             self.assertNotIn("FakeSecret", stderr.getvalue())
             self.assertNotIn(str(self.source), stderr.getvalue())
             self.assertFalse(artifact.package_member(name))
@@ -286,14 +286,54 @@ class ArtifactTests(unittest.TestCase):
         self.make_apk(self.entries() + [(name, b"x" * (1024 * 1024 + 1))])
         with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {"assets/PublicSuffixDatabase.list": SDK_PINS["assets/PublicSuffixDatabase.list"]}), contextlib.redirect_stderr(io.StringIO()) as stderr:
             self.rejected()
-        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-sdk-candidate id=firebase-messaging-event-proto metadata=over-limit"])
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", f"android-artifact: rejected-member namespace=root path-sha256={hashlib.sha256(name.encode()).hexdigest()} bytes={1024 * 1024 + 1} shape=other", "android-artifact: rejected-sdk-candidate id=firebase-messaging-event-proto metadata=over-limit"])
         self.make_apk(self.entries() + [(name, b"FakeSecretCrcPayload")])
         self.apk.write_bytes(self.apk.read_bytes().replace(b"FakeSecretCrcPayload", b"FakeSecretCrcTamper!"))
         with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {"assets/PublicSuffixDatabase.list": SDK_PINS["assets/PublicSuffixDatabase.list"]}), contextlib.redirect_stderr(io.StringIO()) as stderr:
             self.rejected()
-        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-sdk-candidate id=firebase-messaging-event-proto metadata=unavailable"])
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", f"android-artifact: rejected-member namespace=root path-sha256={hashlib.sha256(name.encode()).hexdigest()} bytes={len(b'FakeSecretCrcPayload')} shape=other", "android-artifact: rejected-sdk-candidate id=firebase-messaging-event-proto metadata=unavailable"])
         self.assertNotIn("FakeSecret", stderr.getvalue())
         self.assertNotIn(name, stderr.getvalue())
+
+    def test_error_reason_is_only_sha256_and_os_errors_remain_generic(self):
+        args = ["--source", str(self.source), "--apk", str(self.apk), "--output", str(self.output), "--source-commit", "a" * 40, "--workflow-commit", "b" * 40, "--build-tools", str(self.tools)]
+        reason = "FakeSecretReason " + str(self.source) + " raw SDK stdout"
+        with mock.patch.object(artifact, "source_bundle", side_effect=artifact.VerificationError(reason)), contextlib.redirect_stderr(io.StringIO()) as stderr, contextlib.redirect_stdout(io.StringIO()) as stdout:
+            self.assertEqual(artifact.main(args), 1)
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: reason-sha256=" + hashlib.sha256(reason.encode()).hexdigest(), "android-artifact: verification failed; no public artifact was accepted"])
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertNotIn("FakeSecret", stderr.getvalue())
+        self.assertNotIn(str(self.source), stderr.getvalue())
+        with mock.patch.object(artifact, "source_bundle", side_effect=OSError(reason)), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(artifact.main(args), 1)
+        self.assertEqual(stderr.getvalue(), "android-artifact: verification failed; no public artifact was accepted\n")
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.sdk_calls.call_count, 0)
+
+    def test_unknown_member_only_emits_static_namespace_shape_path_hash_and_size(self):
+        paths = [("CustomerValue.bin", "root", "other"), ("assets/CustomerValue.bin", "assets", "other"), ("res/drawable/$CustomerValue.xml", "res", "generated-xml"), ("META-INF/CustomerValue.bin", "META-INF", "other"), ("kotlin/CustomerValue.bin", "kotlin", "other"), ("lib/x86_64/CustomerValue.bin", "lib", "other"), ("CustomerOrg/CustomerValue.bin", "other", "other")]
+        payload = b"FakeSecretBody"
+        for name, namespace, shape in paths:
+            self.make_apk(self.entries() + [(name, payload)])
+            with self.subTest(name=name), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaisesRegex(artifact.VerificationError, "^unexpected APK member$"):
+                    self.prepare()
+            self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", f"android-artifact: rejected-member namespace={namespace} path-sha256={hashlib.sha256(name.encode()).hexdigest()} bytes={len(payload)} shape={shape}"])
+            self.assertNotIn("CustomerValue", stderr.getvalue())
+            self.assertNotIn("FakeSecret", stderr.getvalue())
+            self.assertFalse(self.output.exists())
+        self.assertEqual(self.sdk_calls.call_count, 0)
+
+    def test_bad_zip_reason_fingerprint_never_contains_raw_bytes_or_path(self):
+        args = ["--source", str(self.source), "--apk", str(self.apk), "--output", str(self.output), "--source-commit", "a" * 40, "--workflow-commit", "b" * 40, "--build-tools", str(self.tools)]
+        self.apk.write_bytes(b"FakeSecretInvalidZipBody")
+        with contextlib.redirect_stderr(io.StringIO()) as stderr, contextlib.redirect_stdout(io.StringIO()) as stdout:
+            self.assertEqual(artifact.main(args), 1)
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: reason-sha256=" + hashlib.sha256(b"APK artifact verification failed").hexdigest(), "android-artifact: verification failed; no public artifact was accepted"])
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertNotIn("FakeSecret", stderr.getvalue())
+        self.assertNotIn(str(self.source), stderr.getvalue())
+        self.assertFalse(self.output.exists())
 
     def test_failure_diagnostics_never_emit_unknown_names_paths_or_sdk_output(self):
         args = ["--source", str(self.source), "--apk", str(self.apk), "--output", str(self.output), "--source-commit", "a" * 40, "--workflow-commit", "b" * 40, "--build-tools", str(self.tools)]
@@ -302,7 +342,12 @@ class ArtifactTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()) as stderr:
                 self.assertEqual(artifact.main(args), 1)
             self.assertEqual(stdout.getvalue(), "")
-            self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: verification failed; no public artifact was accepted"])
+            expected = ["android-artifact: phase=source-bundle-ok"]
+            reason = "unexpected APK member" if name == "assets/CustomerTokenValue123.bin" else "credential configuration rejected"
+            if reason == "unexpected APK member":
+                expected.append(f"android-artifact: rejected-member namespace=assets path-sha256={hashlib.sha256(name.encode()).hexdigest()} bytes={len(b'FakeSecretContent')} shape=other")
+            expected.extend(["android-artifact: reason-sha256=" + hashlib.sha256(reason.encode()).hexdigest(), "android-artifact: verification failed; no public artifact was accepted"])
+            self.assertEqual(stderr.getvalue().splitlines(), expected)
             self.assertNotIn(name, stderr.getvalue())
             self.assertNotIn(str(self.source), stderr.getvalue())
             self.assertFalse(self.output.exists())
@@ -310,10 +355,10 @@ class ArtifactTests(unittest.TestCase):
         self.sdk_calls.side_effect = artifact.VerificationError("FakeSecretSdkStdout " + str(self.source))
         with contextlib.redirect_stderr(io.StringIO()) as stderr:
             self.assertEqual(artifact.main(args), 1)
-        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: phase=apk-inspection-ok", "android-artifact: verification failed; no public artifact was accepted"])
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: phase=apk-inspection-ok", "android-artifact: reason-sha256=" + hashlib.sha256(("FakeSecretSdkStdout " + str(self.source)).encode()).hexdigest(), "android-artifact: verification failed; no public artifact was accepted"])
         with mock.patch.object(artifact, "source_bundle", side_effect=artifact.VerificationError("FakeSecretSource " + str(self.source))), contextlib.redirect_stderr(io.StringIO()) as stderr:
             self.assertEqual(artifact.main(args), 1)
-        self.assertEqual(stderr.getvalue(), "android-artifact: verification failed; no public artifact was accepted\n")
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: reason-sha256=" + hashlib.sha256(("FakeSecretSource " + str(self.source)).encode()).hexdigest(), "android-artifact: verification failed; no public artifact was accepted"])
 
     def test_nonempty_or_arbitrary_generated_extras_rejected(self):
         for name, payload in [("assets/public/cordova.js", b"evil"), ("assets/public/plugins/a.js", b""), ("assets/extra.txt", b"leak")]:
