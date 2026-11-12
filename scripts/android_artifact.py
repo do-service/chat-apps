@@ -45,9 +45,12 @@ REQUIRED_CLASSES = {"Lru/exzvps/chat/mobile/preview/" + name + ";" for name in (
 # Verified installed @capacitor/cli8.6.0 cordova.js136-139,218-230: no-plugin
 # copy creates ONLY these two EMPTY public files, never arbitrary plugin JS.
 EMPTY_CORDOVA = {"assets/public/cordova.js", "assets/public/cordova_plugins.js"}
-# Exact OkHttp Android5.5.1 AAR bytes confirmed in real APK by CI43210511930.
-VERIFIED_SDK_MEMBERS = {"assets/PublicSuffixDatabase.list": (132737, "c75ab827afd7ffff59a51b14729c25dbfc3b45237eb40ccf02bec7b7d44304a4")}
-# These remaining SDK candidates are diagnostic only, never allowlisted.
+# Exact OkHttp Android5.5.1 / Firebase Messaging26.0.1 AAR bytes confirmed in
+# real APKs by CI43210511930 / CI43214785778; no extension/prefix allowances.
+VERIFIED_SDK_MEMBERS = {"assets/PublicSuffixDatabase.list": (132737, "c75ab827afd7ffff59a51b14729c25dbfc3b45237eb40ccf02bec7b7d44304a4"),
+                        "messaging_event.proto": (2381, "0b134a9ffe21416fe225f374f44f6eca58b47519feae4c90b82e25677e8d56ce"),
+                        "messaging_event_extension.proto": (883, "1b9c7669ea81fa9233cce0ca5e4b5f0478071c34fb40deea40d703c4565c42c6")}
+# Fixed candidate IDs: only resources not currently VERIFIED are diagnosed.
 REJECTED_SDK_DIAGNOSTICS = {"messaging_event.proto": "firebase-messaging-event-proto",
                             "messaging_event_extension.proto": "firebase-messaging-event-extension-proto"}
 SDK_PROPERTIES = {name + ".properties" for name in (
@@ -432,7 +435,7 @@ def inspect_apk(candidate, source_files, native_assets):
         for name, info in files.items():
             if not (name in expected or name in VERIFIED_SDK_MEMBERS or name in EMPTY_CORDOVA or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or package_member(name)):
                 for diagnostic_name in REJECTED_SDK_DIAGNOSTICS:
-                    if diagnostic_name in files:
+                    if diagnostic_name in files and diagnostic_name not in VERIFIED_SDK_MEMBERS:
                         diagnose_rejected_sdk_member(archive, files[diagnostic_name])
                 raise VerificationError("unexpected APK member")
             if name in EMPTY_CORDOVA and name not in expected:
