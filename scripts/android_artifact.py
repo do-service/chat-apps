@@ -51,14 +51,15 @@ EMPTY_CORDOVA = {"assets/public/cordova.js", "assets/public/cordova_plugins.js"}
 # CI43223171982 matched path/size only. Actual APK body must still match this pin.
 # transport-runtime5.0.0 schema: official AAR expected bytes; CI43226724501
 # matched path/size only. Actual APK body must still match this pin.
-# framework14.0.1 public SDK HTML (Cordova Tests), outside assets/public:
-# official JAR expected bytes; CI43229953100 matched path/size only, not body SHA.
+# framework14.0.1 public SDK test HTML, outside assets/public: official JAR
+# expected bytes; CI43229953100/43240596120 matched paths/sizes, not body SHAs.
 VERIFIED_SDK_MEMBERS = {"assets/PublicSuffixDatabase.list": (132737, "c75ab827afd7ffff59a51b14729c25dbfc3b45237eb40ccf02bec7b7d44304a4"),
                         "messaging_event.proto": (2381, "0b134a9ffe21416fe225f374f44f6eca58b47519feae4c90b82e25677e8d56ce"),
                         "messaging_event_extension.proto": (883, "1b9c7669ea81fa9233cce0ca5e4b5f0478071c34fb40deea40d703c4565c42c6"),
                         "META-INF/androidx/annotation/annotation/LICENSE.txt": (10175, "809fa1ed21450f59827d1e9aec720bbc4b687434fa22283c6cb5dd82a47ab9c0"),
                         "client_analytics.proto": (2982, "0c76732776772b260528558f9b675a49529cad785c421ca11b487179b8162610"),
-                        "org/apache/cordova/allowlist/index.html": (2109, "5540004eb5fba60d58e9ecc4da04652841d4fac98c2a9ecae594ca5afccf080b")}
+                        "org/apache/cordova/allowlist/index.html": (2109, "5540004eb5fba60d58e9ecc4da04652841d4fac98c2a9ecae594ca5afccf080b"),
+                        "org/apache/cordova/allowlist/index2.html": (1683, "479c0823d6d57965d0903fa682ca4e5f8d287c4a8737dd0ff637495987e5fc57")}
 # Exact AAPT anonymous launcher XML path/size from CI43220267458; format gate,
 # not a vendor content hash or a general allowance for dollar-named resources.
 COMPILED_ICON_XML_PATH = "res/drawable-v24/$ic_launcher_foreground__0.xml"
