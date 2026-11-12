@@ -27,7 +27,8 @@ CERT = "Verifies\nVerified using v2 scheme (APK Signature Scheme v2): true\nNumb
 CLASSES = ["Lru/exzvps/chat/mobile/preview/" + name + ";" for name in ["ChatMobilePlugin", "GuardedMessageHandler", "ChatRuntime"]]
 SDK_PINS = {"assets/PublicSuffixDatabase.list": (132737, "c75ab827afd7ffff59a51b14729c25dbfc3b45237eb40ccf02bec7b7d44304a4"),
             "messaging_event.proto": (2381, "0b134a9ffe21416fe225f374f44f6eca58b47519feae4c90b82e25677e8d56ce"),
-            "messaging_event_extension.proto": (883, "1b9c7669ea81fa9233cce0ca5e4b5f0478071c34fb40deea40d703c4565c42c6")}
+            "messaging_event_extension.proto": (883, "1b9c7669ea81fa9233cce0ca5e4b5f0478071c34fb40deea40d703c4565c42c6"),
+            "META-INF/androidx/annotation/annotation/LICENSE.txt": (10175, "809fa1ed21450f59827d1e9aec720bbc4b687434fa22283c6cb5dd82a47ab9c0")}
 
 
 def dex_fixture(names=CLASSES):
@@ -211,7 +212,7 @@ class ArtifactTests(unittest.TestCase):
             self.rejected()
         self.assertEqual(self.sdk_calls.call_count, 0)
 
-    def test_production_sdk_pins_are_exactly_three_verified_vendor_resources(self):
+    def test_production_sdk_pins_are_exactly_four_pinned_vendor_resources(self):
         self.assertEqual(artifact.VERIFIED_SDK_MEMBERS, SDK_PINS)
 
     def test_exact_sdk_resource_stream_hash_with_synthetic_expected_tuple(self):
@@ -270,7 +271,7 @@ class ArtifactTests(unittest.TestCase):
                 with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {name: (len(data), hashlib.sha256(data).hexdigest())}):
                     self.prepare(output=output)
                 self.assertEqual((output / "chat-mobile-preview-debug.apk").read_bytes(), self.apk.read_bytes())
-        self.assertEqual(self.sdk_calls.call_count, 30)
+        self.assertEqual(self.sdk_calls.call_count, 40)
 
     def test_sdk_resource_mutations_lengths_case_paths_and_archive_aliases_rejected(self):
         for name, (size, _) in SDK_PINS.items():
