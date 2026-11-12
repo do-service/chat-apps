@@ -167,8 +167,88 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(json.loads(stdout.getvalue()), {"files": sorted(artifact.OUTPUT_NAMES)})
         self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: phase=apk-inspection-ok", "android-artifact: phase=sdk-verification-ok"])
 
+    def test_production_sdk_pin_is_exactly_one_verified_okhttp_resource(self):
+        self.assertEqual(getattr(artifact, "VERIFIED_SDK_MEMBERS", {}), {"assets/PublicSuffixDatabase.list": (132737, "c75ab827afd7ffff59a51b14729c25dbfc3b45237eb40ccf02bec7b7d44304a4")})
+
+    def test_exact_sdk_resource_stream_hash_with_synthetic_expected_tuple(self):
+        name, data = "assets/PublicSuffixDatabase.list", b"synthetic SDK data; not real APK acceptance"
+        self.make_apk(self.entries() + [(name, data)])
+        with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {name: (len(data), hashlib.sha256(data).hexdigest())}, create=True):
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.prepare()
+        self.assertEqual(self.sdk_calls.call_count, 5)
+        self.assertNotIn("rejected-sdk-candidate", stderr.getvalue())
+        self.assertEqual((self.output / "chat-mobile-preview-debug.apk").read_bytes(), self.apk.read_bytes())
+
+    def test_pinned_sdk_unix_directory_mode_without_slash_rejected(self):
+        name, data = "assets/PublicSuffixDatabase.list", b"synthetic SDK bytes"
+        info = zipfile.ZipInfo(name)
+        info.create_system = 3
+        info.external_attr = (stat.S_IFDIR | 0o755) << 16
+        self.make_apk(self.entries() + [(info, data)])
+        with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {name: (len(data), hashlib.sha256(data).hexdigest())}):
+            self.rejected()
+        self.assertEqual(self.sdk_calls.call_count, 0)
+
+    def test_pinned_sdk_regular_mode_with_dos_directory_bit_rejected(self):
+        name, data = "assets/PublicSuffixDatabase.list", b"synthetic SDK bytes"
+        info = zipfile.ZipInfo(name)
+        info.create_system = 3
+        info.external_attr = ((stat.S_IFREG | 0o644) << 16) | 0x10
+        self.make_apk(self.entries() + [(info, data)])
+        with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {name: (len(data), hashlib.sha256(data).hexdigest())}):
+            self.rejected()
+        self.assertEqual(self.sdk_calls.call_count, 0)
+
+    def test_pinned_sdk_zero_or_regular_unix_type_flags_still_accepted(self):
+        name, data = "assets/PublicSuffixDatabase.list", b"synthetic SDK bytes"
+        for kind in [0, stat.S_IFREG]:
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = (kind | 0o644) << 16
+            self.make_apk(self.entries() + [(info, data)])
+            output = self.temporary / ("mode-" + str(kind))
+            with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {name: (len(data), hashlib.sha256(data).hexdigest())}):
+                self.prepare(output=output)
+            self.assertEqual((output / "chat-mobile-preview-debug.apk").read_bytes(), self.apk.read_bytes())
+        self.assertEqual(self.sdk_calls.call_count, 10)
+
+    def test_sdk_resource_mutations_lengths_case_paths_and_archive_aliases_rejected(self):
+        name = "assets/PublicSuffixDatabase.list"
+        for data in [b"x" * 132737, b"x" * 132736]:
+            self.make_apk(self.entries() + [(name, data)])
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.rejected()
+            self.assertNotIn("okhttp-public-suffix-db", stderr.getvalue())
+        data = b"synthetic SDK bytes"
+        with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {name: (len(data) + 1, hashlib.sha256(data).hexdigest())}, create=True):
+            self.make_apk(self.entries() + [(name, data)])
+            self.rejected()
+        for alias in ["assets/publicsuffixdatabase.list", "Assets/PublicSuffixDatabase.list", "assets/PublicSuffixDatabase.list.gz", "assets/PublicSuffixDatabase.list.extra", "assets/public/PublicSuffixDatabase.list", name + "/"]:
+            self.make_apk(self.entries() + [(alias, b"" if alias.endswith("/") else data)])
+            self.rejected()
+        self.assertEqual(self.sdk_calls.call_count, 0)
+
+    def test_first_unexpected_entry_diagnoses_all_unapproved_protos_not_verified_db(self):
+        name, data = "assets/PublicSuffixDatabase.list", b"synthetic verified SDK data"
+        protos = [("messaging_event.proto", b"FakeSecretOne"), ("messaging_event_extension.proto", b"FakeSecretTwo")]
+        self.make_apk(self.entries() + [(name, data), ("assets/UnknownCustomerValue.bin", b"FakeSecretUnknown")] + protos)
+        with mock.patch.object(artifact, "VERIFIED_SDK_MEMBERS", {name: (len(data), hashlib.sha256(data).hexdigest())}, create=True), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            with self.assertRaisesRegex(artifact.VerificationError, "^unexpected APK member$"):
+                self.prepare()
+        expected = ["android-artifact: phase=source-bundle-ok"]
+        for path, payload in protos:
+            identifier = "firebase-messaging-event-proto" if path == "messaging_event.proto" else "firebase-messaging-event-extension-proto"
+            expected.append(f"android-artifact: rejected-sdk-candidate id={identifier} bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()}")
+        self.assertEqual(stderr.getvalue().splitlines(), expected)
+        self.assertNotIn("FakeSecret", stderr.getvalue())
+        self.assertNotIn("okhttp-public-suffix-db", stderr.getvalue())
+        self.assertNotIn("UnknownCustomerValue", stderr.getvalue())
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.sdk_calls.call_count, 0)
+
     def test_known_sdk_diagnostics_do_not_allow_candidates_or_leak_content(self):
-        candidates = {"assets/PublicSuffixDatabase.list": "okhttp-public-suffix-db", "messaging_event.proto": "firebase-messaging-event-proto", "messaging_event_extension.proto": "firebase-messaging-event-extension-proto"}
+        candidates = {"messaging_event.proto": "firebase-messaging-event-proto", "messaging_event_extension.proto": "firebase-messaging-event-extension-proto"}
         payload = b"FakeSecretContent-not-for-public-logs"
         for name, identifier in candidates.items():
             self.make_apk(self.entries() + [(name, payload)])
@@ -184,16 +264,16 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(self.sdk_calls.call_count, 0)
 
     def test_known_candidate_diagnostic_is_bounded_and_bad_zip_is_redacted(self):
-        name = "assets/PublicSuffixDatabase.list"
+        name = "messaging_event.proto"
         self.make_apk(self.entries() + [(name, b"x" * (1024 * 1024 + 1))])
         with contextlib.redirect_stderr(io.StringIO()) as stderr:
             self.rejected()
-        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-sdk-candidate id=okhttp-public-suffix-db metadata=over-limit"])
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-sdk-candidate id=firebase-messaging-event-proto metadata=over-limit"])
         self.make_apk(self.entries() + [(name, b"FakeSecretCrcPayload")])
         self.apk.write_bytes(self.apk.read_bytes().replace(b"FakeSecretCrcPayload", b"FakeSecretCrcTamper!"))
         with contextlib.redirect_stderr(io.StringIO()) as stderr:
             self.rejected()
-        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-sdk-candidate id=okhttp-public-suffix-db metadata=unavailable"])
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-sdk-candidate id=firebase-messaging-event-proto metadata=unavailable"])
         self.assertNotIn("FakeSecret", stderr.getvalue())
         self.assertNotIn(name, stderr.getvalue())
 

@@ -45,9 +45,10 @@ REQUIRED_CLASSES = {"Lru/exzvps/chat/mobile/preview/" + name + ";" for name in (
 # Verified installed @capacitor/cli8.6.0 cordova.js136-139,218-230: no-plugin
 # copy creates ONLY these two EMPTY public files, never arbitrary plugin JS.
 EMPTY_CORDOVA = {"assets/public/cordova.js", "assets/public/cordova_plugins.js"}
-# Diagnostics only: these exact public SDK paths remain rejected, not allowlisted.
-REJECTED_SDK_DIAGNOSTICS = {"assets/PublicSuffixDatabase.list": "okhttp-public-suffix-db",
-                            "messaging_event.proto": "firebase-messaging-event-proto",
+# Exact OkHttp Android5.5.1 AAR bytes confirmed in real APK by CI43210511930.
+VERIFIED_SDK_MEMBERS = {"assets/PublicSuffixDatabase.list": (132737, "c75ab827afd7ffff59a51b14729c25dbfc3b45237eb40ccf02bec7b7d44304a4")}
+# These remaining SDK candidates are diagnostic only, never allowlisted.
+REJECTED_SDK_DIAGNOSTICS = {"messaging_event.proto": "firebase-messaging-event-proto",
                             "messaging_event_extension.proto": "firebase-messaging-event-extension-proto"}
 SDK_PROPERTIES = {name + ".properties" for name in (
     "firebase-annotations", "firebase-appcheck-interop", "firebase-common", "firebase-common-ktx",
@@ -416,6 +417,8 @@ def inspect_apk(candidate, source_files, native_assets):
             require(info.file_size <= MAX_MEMBER and info.file_size <= max(info.compress_size, 1) * 500, "APK member size/compression limit")
             total += info.file_size
             require(total <= MAX_TOTAL, "APK total size limit")
+            if name in VERIFIED_SDK_MEMBERS:
+                require(not info.is_dir() and stat.S_IFMT(mode) in (0, stat.S_IFREG) and not info.external_attr & 0x10, "SDK resource must be a regular file")
             if info.is_dir():
                 require(name.split("/", 1)[0] in {"assets", "res", "META-INF", "kotlin", "lib"} and info.file_size == 0, "unexpected ZIP directory")
             else:
@@ -427,8 +430,10 @@ def inspect_apk(candidate, source_files, native_assets):
         expected.update(native_assets)
         require(required | expected.keys() <= files.keys(), "APK assets/package incomplete")
         for name, info in files.items():
-            if not (name in expected or name in EMPTY_CORDOVA or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or package_member(name)):
-                diagnose_rejected_sdk_member(archive, info)
+            if not (name in expected or name in VERIFIED_SDK_MEMBERS or name in EMPTY_CORDOVA or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or package_member(name)):
+                for diagnostic_name in REJECTED_SDK_DIAGNOSTICS:
+                    if diagnostic_name in files:
+                        diagnose_rejected_sdk_member(archive, files[diagnostic_name])
                 raise VerificationError("unexpected APK member")
             if name in EMPTY_CORDOVA and name not in expected:
                 require(info.file_size == 0, "nonempty Cordova generated extra")
@@ -449,6 +454,8 @@ def inspect_apk(candidate, source_files, native_assets):
             require(length == info.file_size, "APK member length mismatch")
             if name in expected:
                 require((length, digest.hexdigest()) == expected[name], "APK bundled asset mismatch")
+            if name in VERIFIED_SDK_MEMBERS:
+                require((length, digest.hexdigest()) == VERIFIED_SDK_MEMBERS[name], "APK pinned SDK resource mismatch")
             if name.endswith(".dex"):
                 found.update(dex_classes(bytes(collected)))
             elif name == "assets/capacitor.config.json":
