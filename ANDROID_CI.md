@@ -22,7 +22,7 @@ The job trusts the pinned CI helpers/actions, the approved private commit and it
 
 ## Build and artifact gates
 
-The job explicitly selects Node.js **24.19.0**, Java **21**, Android platform **36** and Build Tools **36.0.0**, without dependency/source caches. It:
+The job explicitly selects Node.js **24.19.0**, Java **21**, compile platform **37.0** (`platforms;android-37.0`) and verification Build Tools **36.0.0**, without dependency/source caches. The app retains **targetSdk 36 / minSdk 24**. Vasily separately approved the compile-only SDK increase after the first real AAR-metadata check showed that OkHttp **5.5.1** requires API 37. The library is not downgraded: its compromised-intermediate-certificate fix must remain available to AOSP devices. AGP **8.13.0** and Gradle **8.14.3** are unchanged, and their newer-SDK warning is not suppressed. SDK availability is checked before any optional install via the explicit SDK CLI path; no SDK is installed on the developer's Mac. The job:
 
 1. Tests the trusted helpers before fetching private source.
 2. Installs the exported frontend/mobile lockfiles and runs their tests/type checks.
