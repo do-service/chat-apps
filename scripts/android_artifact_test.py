@@ -170,6 +170,47 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(json.loads(stdout.getvalue()), {"files": sorted(artifact.OUTPUT_NAMES)})
         self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: phase=apk-inspection-ok", "android-artifact: phase=sdk-verification-ok"])
 
+    def test_generated_icon_resource_is_one_exact_path_and_size(self):
+        name = "res/drawable-v24/$ic_launcher_foreground__0.xml"
+        self.assertEqual(getattr(artifact, "COMPILED_ICON_XML_PATH", None), name)
+        self.assertEqual(getattr(artifact, "COMPILED_ICON_XML_SIZE", None), 788)
+        self.assertEqual(hashlib.sha256(name.encode()).hexdigest(), "2801305dfc7ac0e5b6be3fe3447fb61b42f1aa0094d636922dde241816b0740d")
+
+    def test_exact_generated_icon_binary_header_fixture_is_accepted(self):
+        name = "res/drawable-v24/$ic_launcher_foreground__0.xml"
+        data = struct.pack("<HHI", 3, 8, 788) + bytes(780)
+        for kind in [0, stat.S_IFREG]:
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = (kind | 0o644) << 16
+            self.make_apk(self.entries() + [(info, data)])
+            output = self.temporary / ("icon-" + str(kind))
+            self.prepare(output=output)
+            self.assertEqual((output / "chat-mobile-preview-debug.apk").read_bytes(), self.apk.read_bytes())
+        self.assertEqual(self.sdk_calls.call_count, 10)
+
+    def test_generated_icon_wrong_size_raw_xml_or_top_header_rejected(self):
+        name = "res/drawable-v24/$ic_launcher_foreground__0.xml"
+        invalid = [struct.pack("<HHI", 3, 8, 787) + bytes(779), struct.pack("<HHI", 3, 8, 789) + bytes(781), b"<vector/>".ljust(788, b" "), struct.pack("<HHI", 2, 8, 788) + bytes(780), struct.pack("<HHI", 3, 12, 788) + bytes(780), struct.pack("<HHI", 3, 8, 787) + bytes(780)]
+        for data in invalid:
+            self.make_apk(self.entries() + [(name, data)])
+            self.rejected()
+        self.assertEqual(self.sdk_calls.call_count, 0)
+
+    def test_generated_icon_aliases_and_directory_flags_rejected(self):
+        name = "res/drawable-v24/$ic_launcher_foreground__0.xml"
+        data = struct.pack("<HHI", 3, 8, 788) + bytes(780)
+        for alias in [name.replace("__0", "__1"), name.replace("ic_launcher", "IC_launcher"), name.replace("drawable-v24", "drawable-v23"), "assets/" + name, name + ".gz", name + "/", "res/drawable-v24/$CustomerValue.xml"]:
+            self.make_apk(self.entries() + [(alias, b"" if alias.endswith("/") else data)])
+            self.rejected()
+        for attrs in [(stat.S_IFDIR | 0o755) << 16, ((stat.S_IFREG | 0o644) << 16) | 0x10]:
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = attrs
+            self.make_apk(self.entries() + [(info, data)])
+            self.rejected()
+        self.assertEqual(self.sdk_calls.call_count, 0)
+
     def test_production_sdk_pins_are_exactly_three_verified_vendor_resources(self):
         self.assertEqual(artifact.VERIFIED_SDK_MEMBERS, SDK_PINS)
 

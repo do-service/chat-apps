@@ -50,6 +50,10 @@ EMPTY_CORDOVA = {"assets/public/cordova.js", "assets/public/cordova_plugins.js"}
 VERIFIED_SDK_MEMBERS = {"assets/PublicSuffixDatabase.list": (132737, "c75ab827afd7ffff59a51b14729c25dbfc3b45237eb40ccf02bec7b7d44304a4"),
                         "messaging_event.proto": (2381, "0b134a9ffe21416fe225f374f44f6eca58b47519feae4c90b82e25677e8d56ce"),
                         "messaging_event_extension.proto": (883, "1b9c7669ea81fa9233cce0ca5e4b5f0478071c34fb40deea40d703c4565c42c6")}
+# Exact AAPT anonymous launcher XML path/size from CI43220267458; format gate,
+# not a vendor content hash or a general allowance for dollar-named resources.
+COMPILED_ICON_XML_PATH = "res/drawable-v24/$ic_launcher_foreground__0.xml"
+COMPILED_ICON_XML_SIZE = 788
 # Fixed candidate IDs: only resources not currently VERIFIED are diagnosed.
 REJECTED_SDK_DIAGNOSTICS = {"messaging_event.proto": "firebase-messaging-event-proto",
                             "messaging_event_extension.proto": "firebase-messaging-event-extension-proto"}
@@ -420,8 +424,10 @@ def inspect_apk(candidate, source_files, native_assets):
             require(info.file_size <= MAX_MEMBER and info.file_size <= max(info.compress_size, 1) * 500, "APK member size/compression limit")
             total += info.file_size
             require(total <= MAX_TOTAL, "APK total size limit")
-            if name in VERIFIED_SDK_MEMBERS:
+            if name in VERIFIED_SDK_MEMBERS or name == COMPILED_ICON_XML_PATH:
                 require(not info.is_dir() and stat.S_IFMT(mode) in (0, stat.S_IFREG) and not info.external_attr & 0x10, "SDK resource must be a regular file")
+            if name == COMPILED_ICON_XML_PATH:
+                require(info.file_size == COMPILED_ICON_XML_SIZE, "compiled icon XML size mismatch")
             if info.is_dir():
                 require(name.split("/", 1)[0] in {"assets", "res", "META-INF", "kotlin", "lib"} and info.file_size == 0, "unexpected ZIP directory")
             else:
@@ -433,7 +439,7 @@ def inspect_apk(candidate, source_files, native_assets):
         expected.update(native_assets)
         require(required | expected.keys() <= files.keys(), "APK assets/package incomplete")
         for name, info in files.items():
-            if not (name in expected or name in VERIFIED_SDK_MEMBERS or name in EMPTY_CORDOVA or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or package_member(name)):
+            if not (name in expected or name in VERIFIED_SDK_MEMBERS or name == COMPILED_ICON_XML_PATH or name in EMPTY_CORDOVA or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or package_member(name)):
                 namespace = name.split("/", 1)[0] if "/" in name else ""
                 namespace = namespace if namespace in {"assets", "res", "META-INF", "kotlin", "lib"} else ("root" if not namespace else "other")
                 shape = "generated-xml" if namespace == "res" and "$" in name.rsplit("/", 1)[-1] and name.endswith(".xml") else "other"
@@ -446,7 +452,7 @@ def inspect_apk(candidate, source_files, native_assets):
                 require(info.file_size == 0, "nonempty Cordova generated extra")
             digest = hashlib.sha256()
             length = 0
-            keep = name.endswith(".dex") or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or name in SDK_PROPERTIES
+            keep = name.endswith(".dex") or name == COMPILED_ICON_XML_PATH or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or name in SDK_PROPERTIES
             collected = bytearray()
             with archive.open(info) as stream:
                 while True:
@@ -465,6 +471,8 @@ def inspect_apk(candidate, source_files, native_assets):
                 require((length, digest.hexdigest()) == VERIFIED_SDK_MEMBERS[name], "APK pinned SDK resource mismatch")
             if name.endswith(".dex"):
                 found.update(dex_classes(bytes(collected)))
+            elif name == COMPILED_ICON_XML_PATH:
+                require(len(collected) == COMPILED_ICON_XML_SIZE and struct.unpack_from("<HHI", collected) == (3, 8, len(collected)), "compiled icon binary XML header mismatch")
             elif name == "assets/capacitor.config.json":
                 check_config(bytes(collected))
             elif name == "assets/capacitor.plugins.json":
