@@ -139,7 +139,7 @@ test("frameless opaque modal uses hardened preferences, private session, no menu
   const prefs = child.options.webPreferences; assert.ok(prefs);
   for (const [key, value] of Object.entries({ contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: false,
     sandbox: true, webSecurity: true, webviewTag: false, navigateOnDragDrop: false })) assert.equal(Reflect.get(prefs, key), value, key);
-  assert.equal(prefs.preload, "/test-dist/external-link-preload.cjs");
+  assert.equal(prefs.preload, path.join("/test-dist", "external-link-preload.cjs"));
   assert.equal(prefs.session, f.sessions[0]?.ses);
   assert.equal(f.partitions[0]?.startsWith("persist:"), false);
   assert.equal(child.menuRemoved, true);
