@@ -26,14 +26,29 @@ type PermissionDetails = Record<string, unknown>;
 type RequestHandler = (contents: unknown, permission: string, callback: (allowed: boolean) => void, details: PermissionDetails) => void;
 type CheckHandler = (contents: unknown, permission: string, requestingOrigin: string, details: PermissionDetails) => boolean;
 
-async function fixture(cold = false, options: { spike?: boolean; platform?: string; status?: MediaStatus; cameraStatus?: MediaStatus; notificationPermission?: string; realNotificationPermission?: boolean } = {}) {
+async function fixture(cold = false, options: { spike?: boolean; platform?: string; status?: MediaStatus; cameraStatus?: MediaStatus; notificationPermission?: string; realNotificationPermission?: boolean; badgeResult?: boolean } = {}) {
   const events: DesktopEvent[] = [];
+  const badgeCalls: number[] = [];
+  const startupCalls: string[] = [];
+  const windowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+  const images: { source: string; template: boolean; size?: { width: number; height: number } }[] = [];
+  const trayImages: unknown[] = [];
+  const image = (source: string) => {
+    const value: (typeof images)[number] = { source, template: false };
+    images.push(value);
+    return { source,
+      setTemplateImage(template: boolean) { value.template = template; },
+      resize(size: { width: number; height: number }) { value.size = size; return this; },
+    };
+  };
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   const power = new EventEmitter();
   const app = Object.assign(new EventEmitter(), {
     setName() {}, setPath() {}, setAppUserModelId() {}, enableSandbox() {},
+    setDesktopName: (name: string) => { startupCalls.push(`desktop-name:${name}`); },
     getPath: () => "/unused-test-profile", requestSingleInstanceLock: () => true,
-    whenReady: async () => {}, setBadgeCount: () => true, quit() {}, exit() {},
+    whenReady: async () => { startupCalls.push("when-ready"); },
+    setBadgeCount: (count: number) => { badgeCalls.push(count); return options.badgeResult ?? true; }, quit() {}, exit() {},
   });
   let state: WindowState = { focused: false, visible: false, minimized: true };
   let destroyed = false;
@@ -68,15 +83,21 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
   let checkHandler: CheckHandler | undefined;
   let deviceHandler: (() => boolean) | undefined;
   let displayHandler: ((request: unknown, callback: (value: unknown) => void) => void) | undefined;
-  const messages: { message: string }[] = [];
+  const messages: { message: string; detail?: string }[] = [];
   const applicationMenus: MenuItemConstructorOptions[][] = [];
   const trayMenus: MenuItemConstructorOptions[][] = [];
   const frame = { origin, url: `${origin}/`, get parent() { return frameParent; }, isDestroyed: () => frameDestroyed,
     send: (_channel: string, event: DesktopEvent) => { events.push(structuredClone(event)); } };
+  let windowOpen: ((details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse) | undefined;
   const contents = Object.assign(new EventEmitter(), {
-    mainFrame: frame, isDestroyed: () => contentsDestroyed, setWindowOpenHandler() {}, getURL: () => contentsURL ?? frame.url,
+    mainFrame: frame, isDestroyed: () => contentsDestroyed,
+    setWindowOpenHandler(handler: typeof windowOpen) { windowOpen = handler; }, getURL: () => contentsURL ?? frame.url,
   });
+  let rootWindow: Window | undefined;
   class Window extends EventEmitter {
+    constructor(options: Electron.BrowserWindowConstructorOptions) {
+      super(); startupCalls.push("window"); windowOptions.push(options); rootWindow = this;
+    }
     webContents = contents;
     isDestroyed() { return destroyed; }
     isFocused() { return state.focused; }
@@ -94,6 +115,7 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
     setDisplayMediaRequestHandler(handler: typeof displayHandler) { displayHandler = handler; }, protocol: { handle() {} },
   });
   class Tray extends EventEmitter {
+    constructor(icon: unknown) { super(); trayImages.push(icon); }
     setToolTip() {}
     setContextMenu(menu: { items: MenuItemConstructorOptions[] }) { trayMenus.push(menu.items); }
     destroy() {}
@@ -113,6 +135,9 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
     create: (options, value) => { createdNotifications.push(options.id); callbacks = value; return { show() {}, close() {} }; },
     subscribeActivation: (activate) => { if (cold) activate(seed.osId); return () => {}; },
   };
+  let authSuccess: (() => void) | undefined;
+  const externalPrompts: { parent: unknown; url: string; signal: AbortSignal }[] = [];
+  let confirmLink: (signal: AbortSignal) => Promise<boolean> = async () => false;
   const modules: Record<string, unknown> = {
     electron: {
       app, BrowserWindow: Window, ipcMain: { handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => handlers.set(channel, handler) },
@@ -124,7 +149,7 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
         getMediaAccessStatus: (kind: MediaKind) => { osCalls.push(`status:${kind}`); if (statusFailures.has(kind)) throw new Error("secret URL"); return mediaStatus[kind]; },
         askForMediaAccess: (kind: MediaKind) => { osCalls.push(`ask:${kind}`); return consent[kind](); },
       },
-      nativeImage: { createFromBitmap: () => ({ setTemplateImage() {} }) },
+      nativeImage: { createFromBitmap: () => image("bitmap"), createFromPath: (path: string) => image(path) },
       powerMonitor: power, protocol: { registerSchemesAsPrivileged() {} }, session: { fromPartition: () => ses },
       shell: { openExternal: async (url: string) => { notificationCalls.push(url); } }, dialog: {
         showErrorBox: () => { throw new Error("Unexpected startup failure"); },
@@ -144,13 +169,19 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
         })) : permission,
     },
     "./notification-store": { FileMetadataStore: Store },
-    "./desktop-auth": { DesktopAuthService: class { dispose() {} } },
+    "./desktop-auth": { DesktopAuthService: class {
+      constructor(options: { onSuccess: () => void }) { authSuccess = options.onSuccess; }
+      dispose() {}
+    } },
     "./electron-auth": { installAuthCookieBarrier: () => ({}) },
+    "./external-link-dialog": { confirmExternalLink: (request: (typeof externalPrompts)[number]) => {
+      externalPrompts.push(request); return confirmLink(request.signal);
+    } },
   };
   runInNewContext(source, {
     require: (name: string) => { if (!(name in modules)) throw new Error(`Unexpected module ${name}`); return modules[name]; },
     __dirname: "/unused-test-bundle", process: { platform: options.platform ?? "darwin", argv: [], env: {} },
-    console: { info() {}, error() {} }, Buffer, setImmediate, setTimeout, clearTimeout,
+    console: { info() {}, error() {} }, Buffer, AbortController, setImmediate, setTimeout, clearTimeout,
   });
   await new Promise<void>((done) => setImmediate(done));
   assert.ok(handlers.has(contract.IPC.ready));
@@ -163,6 +194,14 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
     setState: (value: WindowState) => { state = value; },
     click: () => { assert.ok(callbacks); callbacks.click(); },
     contents, frame, osCalls, notificationCalls, applicationMenus, trayMenus, createdNotifications,
+    badgeCalls, startupCalls, windowOptions, images, trayImages, messages, externalPrompts,
+    setLinkConfirmation: (value: typeof confirmLink) => { confirmLink = value; },
+    popup: (url: string, postBody?: Electron.PostBody) => {
+      assert.ok(windowOpen);
+      return windowOpen({ url, frameName: "", features: "", disposition: "new-window", referrer: { url: frame.url, policy: "default" }, ...(postBody ? { postBody } : {}) });
+    },
+    windowEvent: (event: string) => { assert.ok(rootWindow); rootWindow.emit(event); },
+    authSuccess: () => { assert.ok(authSuccess); authSuccess(); },
     activate: () => app.emit("activate"),
     setNotificationPermission: (value: string) => { notificationPermission = value; },
     setNotificationQuery: (value: () => Promise<string>) => { notificationQuery = value; },
@@ -200,12 +239,205 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
   };
 }
 
+test("external HTTPS link uses the custom dialog and opens only the original confirmed URL", async () => {
+  const f = await fixture();
+  try {
+    f.setState({ focused: true, visible: true, minimized: false });
+    f.setLinkConfirmation(async () => true);
+    assert.deepEqual(structuredClone(f.popup("https://example.com:8443/docs?q=one#section")), { action: "deny" });
+    await settle();
+    assert.equal(f.externalPrompts.length, 1);
+    assert.equal(f.externalPrompts[0]?.url, "https://example.com:8443/docs?q=one#section");
+    assert.deepEqual(f.notificationCalls.filter((value) => value.startsWith("https:")), ["https://example.com:8443/docs?q=one#section"]);
+    assert.deepEqual(f.messages, []);
+  } finally { f.stop(); }
+});
+
+test("external link cancellation and failed dialog never open a URL and allow a later retry", async () => {
+  const f = await fixture();
+  try {
+    f.setState({ focused: true, visible: true, minimized: false });
+    for (const confirm of [async () => false, async () => { throw new Error("do-not-log-link"); }, async () => true]) {
+      f.setLinkConfirmation(confirm); f.popup("https://example.com/"); await settle();
+    }
+    assert.equal(f.externalPrompts.length, 3);
+    assert.deepEqual(f.notificationCalls.filter((value) => value.startsWith("https:")), ["https://example.com/"]);
+  } finally { f.stop(); }
+});
+
+test("external link policy still denies invalid protocols, credentials, POST and same-origin shell opens", async () => {
+  const f = await fixture();
+  try {
+    f.setState({ focused: true, visible: true, minimized: false });
+    f.setLinkConfirmation(async () => true);
+    for (const url of ["http://example.com", "javascript:alert(1)", "data:text/html,hi", "file:///tmp/readme", "mailto:a@example.com", "blob:https://example.com/id", "https://user:password@example.com", "https://example.com/\\path", "https://example.com/\n", `https://example.com/${"a".repeat(8192)}`, `${origin}/file.pdf`]) {
+      assert.deepEqual(structuredClone(f.popup(url)), { action: "deny" });
+    }
+    assert.deepEqual(structuredClone(f.popup("https://example.com/", { contentType: "application/x-www-form-urlencoded", data: [] })), { action: "deny" });
+    await settle();
+    assert.deepEqual(f.externalPrompts, []);
+    assert.deepEqual(f.notificationCalls.filter((value) => value.startsWith("https:")), []);
+  } finally { f.stop(); }
+});
+
+test("only one external link prompt can be pending and duplicates are not queued", async () => {
+  const f = await fixture();
+  try {
+    f.setState({ focused: true, visible: true, minimized: false });
+    let answer: ((value: boolean) => void) | undefined;
+    f.setLinkConfirmation(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+    f.popup("https://first.example/"); f.popup("https://second.example/"); await settle();
+    assert.equal(f.externalPrompts.length, 1); assert.ok(answer);
+    answer(true); await settle();
+    assert.deepEqual(f.notificationCalls.filter((value) => value.startsWith("https:")), ["https://first.example/"]);
+    f.setLinkConfirmation(async () => false); f.popup("https://third.example/"); await settle();
+    assert.equal(f.externalPrompts.length, 2);
+  } finally { f.stop(); }
+});
+
+for (const change of ["navigate", "same-document", "account", "quit", "hide", "minimize", "closed", "crash"]) {
+  test(`external link pending confirmation is cancelled after ${change}`, async () => {
+    const f = await fixture();
+    try {
+      f.setState({ focused: true, visible: true, minimized: false });
+      let answer: ((value: boolean) => void) | undefined;
+      f.setLinkConfirmation(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+      f.popup("https://example.com/"); await settle();
+      assert.equal(f.externalPrompts.length, 1); assert.ok(answer);
+      if (change === "navigate") f.navigate();
+      else if (change === "same-document") f.contents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+      else if (change === "account") f.invoke(contract.IPC.setAccount, "bob");
+      else if (change === "quit") f.stop();
+      else if (change === "crash") f.contents.emit("render-process-gone");
+      else f.windowEvent(change);
+      assert.equal(f.externalPrompts[0]?.signal.aborted, true);
+      answer(true); await settle();
+      assert.deepEqual(f.notificationCalls.filter((value) => value.startsWith("https:")), []);
+    } finally { f.stop(); }
+  });
+}
+
+for (const change of ["destroy-window", "destroy-contents", "destroy-frame", "frame-url", "contents-url", "frame-origin"]) {
+  test(`external link answer rechecks the root even without a lifecycle event after ${change}`, async () => {
+    const f = await fixture();
+    try {
+      f.setState({ focused: true, visible: true, minimized: false });
+      let answer: ((value: boolean) => void) | undefined;
+      f.setLinkConfirmation(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+      f.popup("https://example.com/"); await settle(); assert.ok(answer);
+      if (change === "destroy-window") f.destroyWindow();
+      if (change === "destroy-contents") f.destroyContents();
+      if (change === "destroy-frame") f.destroyFrame();
+      if (change === "frame-url") f.frame.url = `${origin}/new-document`;
+      if (change === "contents-url") f.setContentsURL(`${origin}/new-document`);
+      if (change === "frame-origin") f.frame.origin = "https://attacker.example";
+      answer(true); await settle();
+      assert.deepEqual(f.notificationCalls.filter((value) => value.startsWith("https:")), []);
+    } finally { f.stop(); }
+  });
+}
+
+for (const change of ["navigate", "account", "quit", "destroy", "untrusted", "hidden"]) {
+  test(`external link scheduled from an obsolete or unavailable root is ignored after ${change}`, async () => {
+    const f = await fixture();
+    try {
+      f.setState({ focused: true, visible: true, minimized: false });
+      f.setLinkConfirmation(async () => true); f.popup("https://example.com/");
+      if (change === "navigate") f.navigate();
+      if (change === "account") f.invoke(contract.IPC.setAccount, "bob");
+      if (change === "quit") f.stop();
+      if (change === "destroy") f.destroyWindow();
+      if (change === "untrusted") f.frame.origin = "https://attacker.example";
+      if (change === "hidden") f.setState({ focused: false, visible: false, minimized: false });
+      await settle();
+      assert.deepEqual(f.externalPrompts, []);
+      assert.deepEqual(f.notificationCalls.filter((value) => value.startsWith("https:")), []);
+    } finally { f.stop(); }
+  });
+}
+
 async function show(f: Awaited<ReturnType<typeof fixture>>) {
   f.invoke(contract.IPC.setAccount, "alice");
   assert.deepEqual(await f.invoke(contract.IPC.showNotification, {
     id: "message-5", accountId: "alice", kind: "message", title: "Title", body: "Body",
     route: { chatId: "chat_1" }, silent: true, expiresAt: Date.now() + 60_000,
   }), { accepted: true });
+}
+
+for (const platform of ["linux", "darwin", "win32"]) {
+  test(`${platform} main advertises only supported badge API and forwards valid counts`, async () => {
+    const f = await fixture(false, { platform });
+    try {
+      const capabilities = f.invoke(contract.IPC.capabilities); assert.ok(contract.isRecord(capabilities));
+      assert.equal(capabilities.badge, platform !== "win32");
+      f.invoke(contract.IPC.setBadge, 7); f.invoke(contract.IPC.setBadge, 999999); f.invoke(contract.IPC.setBadge, 0);
+      assert.deepEqual(f.badgeCalls, platform === "win32" ? [] : [7, 999999, 0]);
+    } finally { f.stop(); }
+  });
+
+  test(`${platform} account switch, logout and auth success clear badge without changing Windows support`, async () => {
+    const f = await fixture(false, { platform, spike: false });
+    try {
+      f.invoke(contract.IPC.setAccount, "alice"); f.invoke(contract.IPC.setBadge, 9);
+      f.invoke(contract.IPC.setAccount, "bob"); f.invoke(contract.IPC.setBadge, 3);
+      f.invoke(contract.IPC.setAccount, null); f.invoke(contract.IPC.setBadge, 2);
+      f.authSuccess();
+      assert.deepEqual(f.badgeCalls, platform === "win32" ? [] : [0, 9, 0, 3, 0, 2, 0]);
+    } finally { f.stop(); }
+  });
+
+  test(`${platform} keeps macOS template and Windows branding, using bundled logo only on Linux`, async () => {
+    const f = await fixture(false, { platform });
+    try {
+      assert.equal(f.windowOptions.length, 1); assert.equal(f.trayImages.length, 1);
+      assert.equal(f.windowOptions[0]?.icon, platform === "linux" ? "/unused-test-bundle/app-icon.png" : undefined);
+      assert.equal(f.images.length, 1);
+      assert.equal(f.images[0]?.source, platform === "linux" ? "/unused-test-bundle/app-icon.png" : "bitmap");
+      assert.equal(f.images[0]?.template, platform === "darwin");
+      if (platform === "linux") assert.deepEqual(structuredClone(f.images[0]?.size), { width: 20, height: 20 });
+      assert.ok(contract.isRecord(f.trayImages[0]));
+      assert.equal(f.trayImages[0].source, f.images[0]?.source);
+      assert.deepEqual(f.startupCalls, platform === "linux"
+        ? [`desktop-name:${contract.APP_ID}.desktop`, "when-ready", "window"] : ["when-ready", "window"]);
+    } finally { f.stop(); }
+  });
+}
+
+test("Linux badge IPC rejects invalid counts, arity and untrusted documents before OS calls", async () => {
+  const f = await fixture(false, { platform: "linux" });
+  try {
+    for (const count of [-1, 1000000, 1.5, NaN, Infinity, "3", null, undefined, {}, []]) {
+      assert.throws(() => f.invoke(contract.IPC.setBadge, count));
+    }
+    assert.throws(() => f.invoke(contract.IPC.setBadge));
+    assert.throws(() => f.invoke(contract.IPC.setBadge, 3, 4));
+    const handler = f.handlers.get(contract.IPC.setBadge); assert.ok(handler);
+    for (const sender of [
+      { ...f.sender, sender: {} },
+      { ...f.sender, senderFrame: { ...f.frame, origin: "https://attacker.example" } },
+      { ...f.sender, senderFrame: { ...f.frame, parent: f.frame } },
+      { ...f.sender, senderFrame: null },
+    ]) assert.throws(() => handler(sender, 3));
+    f.frame.origin = "null"; assert.throws(() => f.invoke(contract.IPC.setBadge, 3));
+    assert.deepEqual(f.badgeCalls, []);
+  } finally { f.stop(); }
+});
+
+for (const badgeResult of [false, true]) {
+  test(`Linux badge result ${badgeResult} never guarantees a visible LauncherEntry badge`, async () => {
+    const f = await fixture(false, { platform: "linux", badgeResult });
+    try {
+      assert.equal(f.invoke(contract.IPC.setBadge, 3), undefined);
+      assert.deepEqual(f.badgeCalls, [3]);
+      const diagnostic = await f.diagnostic() ?? "";
+      if (!badgeResult) assert.match(diagnostic, /Badge недоступен/u);
+      else assert.doesNotMatch(diagnostic, /Badge недоступен/u);
+      const detail = f.messages.at(-1)?.detail ?? "";
+      assert.match(detail, /LauncherEntry/u);
+      assert.match(detail, /не гарант/u);
+      assert.match(detail, /\.desktop/u);
+    } finally { f.stop(); }
+  });
 }
 
 for (const [role, accelerator] of [["minimize", "Command+M"], ["hide", "Command+H"]]) {

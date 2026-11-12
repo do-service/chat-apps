@@ -47,6 +47,7 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: Chat Desktop Spike
 linux:
+  syncDesktopName: true
   target:
     - target: AppImage
       arch:

@@ -17,6 +17,7 @@ import { createHiddenRecoveryScheduler, isAbortedNavigation } from "./lifecycle"
 import { createMediaPermissionPolicy } from "./media-permissions";
 import { AuthFailure, DesktopAuthService } from "./desktop-auth";
 import { createElectronAuthAttempt, installAuthCookieBarrier } from "./electron-auth";
+import { confirmExternalLink } from "./external-link-dialog";
 import {
   ERROR_URL, SPIKE_ORIGIN, TRUSTED_ORIGIN_ARGUMENT, externalHTTPSURL, isAllowedFrameNavigation, isTrustedSender, isTrustedURL,
   loginNavigationDoor, spikeResource,
@@ -25,6 +26,7 @@ import {
 app.setName("Chat Desktop Spike");
 app.setPath("userData", join(app.getPath("appData"), "Chat Desktop Spike"));
 app.setAppUserModelId(APP_ID);
+if (process.platform === "linux") app.setDesktopName(`${APP_ID}.desktop`);
 app.enableSandbox();
 
 // Resolve the explicit diagnostic-build marker before Chromium registers custom schemes.
@@ -50,7 +52,7 @@ let notificationAccount: string | null = null;
 let notificationAccountGeneration = 0;
 let pendingFocus = false;
 let restoreMissingWindow: (() => void) | null = null;
-let externalPrompt = false;
+let externalPrompt: AbortController | null = null;
 let diagnostic = "Запуск прототипа";
 type StartupStage = "configuration" | "waiting-app-ready" | "app-ready" | "creating-session"
   | "installing-session-policy" | "session-policy-installed" | "creating-notification-service"
@@ -93,6 +95,7 @@ function configuration(): RuntimeConfiguration {
 }
 
 function trayIcon(): Electron.NativeImage {
+  if (process.platform === "linux") return nativeImage.createFromPath(join(__dirname, "app-icon.png")).resize({ width: 20, height: 20 });
   const size = 20;
   const pixels = Buffer.alloc(size * size * 4);
   for (let y = 2; y < 18; y += 1) {
@@ -203,6 +206,7 @@ function registerIPC(
     // An already-ready renderer may receive pending activation during account binding.
     emit(config, { type: "window-state", state: windowState() });
     notificationAccountGeneration++;
+    externalPrompt?.abort();
     notificationAccount = accountId;
     service.setAccount(accountId);
     if (badge) app.setBadgeCount(0);
@@ -238,20 +242,18 @@ function registerIPC(
   });
 }
 
-async function openExternal(config: RuntimeConfiguration, value: string): Promise<void> {
+async function openExternal(
+  config: RuntimeConfiguration, window: BrowserWindow, value: string, current: () => boolean,
+): Promise<void> {
   const url = externalHTTPSURL(value, config.trustedOrigin);
-  const window = mainWindow;
-  if (!url || externalPrompt || !window || window.isDestroyed()) return;
-  externalPrompt = true;
+  if (!url || externalPrompt || !current()) return;
+  const controller = new AbortController();
+  externalPrompt = controller;
   try {
-    const result = await dialog.showMessageBox(window, {
-      type: "question", title: "Внешняя ссылка", message: "Открыть HTTPS-ссылку в системном браузере?",
-      detail: `Сайт: ${new URL(url).hostname}\nCookies приложения не передаются. Для входа используйте отдельную процедуру подтверждения в системном браузере.`,
-      buttons: ["Отмена", "Открыть"], defaultId: 0, cancelId: 0, noLink: true,
-    });
-    if (result.response === 1) await shell.openExternal(url);
+    const confirmed = await confirmExternalLink({ parent: window, url, signal: controller.signal });
+    if (confirmed && !controller.signal.aborted && current()) await shell.openExternal(url);
   } catch { diagnostic = "Не удалось открыть внешнюю ссылку"; }
-  finally { externalPrompt = false; }
+  finally { if (externalPrompt === controller) externalPrompt = null; }
 }
 
 function installSessionPolicy(ses: Session, config: RuntimeConfiguration): void {
@@ -395,20 +397,32 @@ function installWindowPolicy(
         if (!isAbortedNavigation(error)) return showErrorPage(window);
       }); });
     } else {
-      setImmediate(() => { void openExternal(config, details.url); });
+      const frame = contents.mainFrame;
+      const documentURL = frame.url;
+      const navigation = mediaNavigationGeneration;
+      const account = notificationAccountGeneration;
+      // Neither the scheduled prompt nor its answer may outlive the requesting document/account.
+      const current = () => !quitting && mainWindow === window && !window.isDestroyed()
+        && !contents.isDestroyed() && !frame.isDestroyed() && frame === contents.mainFrame
+        && window.isVisible() && !window.isMinimized() && contents.getURL() === documentURL
+        && frame.url === documentURL && navigation === mediaNavigationGeneration
+        && account === notificationAccountGeneration && isTrustedSender({
+          expectedContents: true, mainFrame: frame.parent === null, frameOrigin: frame.origin, frameURL: frame.url,
+        }, config.trustedOrigin);
+      setImmediate(() => { void openExternal(config, window, details.url, current); });
     }
     return { action: "deny" };
   });
   contents.on("did-start-navigation", (details) => {
     // A consent answer must not revive a request from an earlier document, even after back/reload.
-    if (details.isMainFrame) mediaNavigationGeneration++;
+    if (details.isMainFrame) { mediaNavigationGeneration++; externalPrompt?.abort(); }
     if (details.isMainFrame && !details.isSameDocument) {
       rendererReady = false;
       service.setReady(false);
     }
   });
   // Also invalidate requests made by the departing document while navigation was in flight.
-  contents.on("did-navigate", () => { mediaNavigationGeneration++; });
+  contents.on("did-navigate", () => { mediaNavigationGeneration++; externalPrompt?.abort(); });
   contents.on("did-fail-load", (_event, code, _description, _url, isMainFrame) => {
     if (!isMainFrame || code === -3) return;
     diagnostic = `Не удалось загрузить страницу (код ${code})`;
@@ -416,6 +430,7 @@ function installWindowPolicy(
     void showErrorPage(window);
   });
   contents.on("render-process-gone", () => {
+    externalPrompt?.abort();
     mediaNavigationGeneration++;
     rendererReady = false;
     service.setReady(false);
@@ -428,10 +443,11 @@ function installWindowPolicy(
   window.on("focus", emitState);
   window.on("blur", emitState);
   window.on("show", emitState);
-  window.on("hide", emitState);
-  window.on("minimize", emitState);
+  window.on("hide", () => { externalPrompt?.abort(); emitState(); });
+  window.on("minimize", () => { externalPrompt?.abort(); emitState(); });
   window.on("restore", emitState);
   window.on("close", (event) => {
+    externalPrompt?.abort();
     if (quitting) return;
     event.preventDefault();
     if (tray || process.platform === "darwin") window.hide();
@@ -442,6 +458,7 @@ function installWindowPolicy(
   });
   window.on("closed", () => {
     if (mainWindow !== window) return;
+    externalPrompt?.abort();
     mainWindow = null;
     rendererReady = false;
     service.setReady(false);
@@ -477,7 +494,7 @@ function installMenus(config: RuntimeConfiguration, service: NotificationService
     const state = windowState();
     await dialog.showMessageBox({
       type: "info", title: "Chat Desktop Spike — диагностика", message: diagnostic,
-      detail: `Режим: ${config.spike ? "локальный --spike" : "HTTPS оболочка"}\nФокус: ${state.focused}; видно: ${state.visible}; свёрнуто: ${state.minimized}\nNative notifications API: ${service.supported()} (не гарантия показа ОС)\nКрестик скрывает окно; «Выход» завершает получение событий.\nСистемный вход: ${config.spike ? "выключен в --spike" : "реализован; сервер и IdP требуют отдельной приёмки"}. Микрофон и камера: только доверенное главное окно macOS с отдельным согласием ОС для каждого устройства; демонстрация экрана запрещена.`,
+      detail: `Режим: ${config.spike ? "локальный --spike" : "HTTPS оболочка"}\nФокус: ${state.focused}; видно: ${state.visible}; свёрнуто: ${state.minimized}\nNative notifications API: ${service.supported()} (не гарантия показа ОС)\n${process.platform === "linux" ? `Badge Linux: LauncherEntry; успешный вызов API не гарантирует видимый счётчик. Нужны поддержка dock/taskbar и установленный ${APP_ID}.desktop.\n` : ""}Крестик скрывает окно; «Выход» завершает получение событий.\nСистемный вход: ${config.spike ? "выключен в --spike" : "реализован; сервер и IdP требуют отдельной приёмки"}. Микрофон и камера: только доверенное главное окно macOS с отдельным согласием ОС для каждого устройства; демонстрация экрана запрещена.`,
     });
   };
   const menuOperation = (operation: () => void) => () => {
@@ -524,7 +541,7 @@ function installMenus(config: RuntimeConfiguration, service: NotificationService
 // Keep the tray/service alive even when renderer window.close() bypasses BrowserWindow's close event.
 // Explicit Quit still proceeds through before-quit and will-quit without relying on window-all-closed.
 app.on("window-all-closed", () => {});
-app.on("before-quit", () => { quitting = true; compatibilityDialog?.abort(); desktopAuth?.dispose(); notifications?.dispose(); });
+app.on("before-quit", () => { quitting = true; externalPrompt?.abort(); compatibilityDialog?.abort(); desktopAuth?.dispose(); notifications?.dispose(); });
 app.on("will-quit", () => { tray?.destroy(); });
 
 if (!app.requestSingleInstanceLock()) {
@@ -572,14 +589,16 @@ async function start(): Promise<void> {
     if (!quitting && status === "granted") void service.restoreNative();
   });
   setStartupStage("notification-history-requested");
-  // Windows overlay and desktop-environment-specific Linux badge support are outside D1.
-  const badge = os === "darwin";
+  // Linux LauncherEntry is best effort: a successful API call does not prove a dock received it.
+  // Windows taskbar overlays remain unsupported.
+  const badge = os === "darwin" || os === "linux";
   setStartupStage("registering-ipc");
   registerIPC(config, service, badge, permission);
   const createWindow = (showWhenReady: boolean): BrowserWindow => {
     setStartupStage("creating-window");
     const window = new BrowserWindow({
       width: 1100, height: 780, minWidth: 640, minHeight: 480, show: false, title: "Chat Desktop Spike",
+      ...(os === "linux" ? { icon: join(__dirname, "app-icon.png") } : {}),
       webPreferences: {
         session: ses, preload: join(__dirname, "preload.cjs"),
         additionalArguments: [`${TRUSTED_ORIGIN_ARGUMENT}${config.trustedOrigin}`],
@@ -680,6 +699,7 @@ async function start(): Promise<void> {
       onCommitFailure: loadTarget,
       onSuccess: () => {
         notificationAccountGeneration++;
+        externalPrompt?.abort();
         notificationAccount = null;
         try { service.setAccount(null); if (badge) app.setBadgeCount(0); }
         catch { diagnostic = "Вход завершён; не удалось очистить локальные уведомления предыдущего аккаунта"; }

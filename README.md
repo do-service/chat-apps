@@ -9,22 +9,30 @@
 - В [app-config.json](<app-config.json>) закреплён origin `https://chat.exz-vps.ru`. Оболочка использует текущую развёрнутую версию этого сайта.
 - Desktop bridge поддерживает выборочное снятие уведомлений и явное macOS-согласие на native notifications. Для полного сценария нужны **обе поставки**: новая оболочка с native addon и совместимый развёрнутый frontend-адаптер. Этот репозиторий не содержит и не развёртывает сайт; состав desktop-сборки не доказывает версию remote frontend или end-to-end результат.
 - Локальный `--spike` — диагностика уведомлений и lifecycle с искусственными событиями, не offline-версия Chat и не проверка реальных сообщений.
-- Версия preview — `0.1.1-preview.1`. Сохраняются существующие имя `Chat Desktop Spike`, npm package `chat-desktop-spike`, app ID `ru.exz-vps.chat.desktop.spike` и профиль/session partition. Обновление не сбрасывает сохранённые предпочтения пользователя.
+- Версия preview — `0.1.1-preview.2`. Сохраняются существующие имя `Chat Desktop Spike`, npm package `chat-desktop-spike`, app ID `ru.exz-vps.chat.desktop.spike` и профиль/session partition. Обновление не сбрасывает сохранённые предпочтения пользователя.
 - Публичная доступность репозитория не выдаёт open-source лицензию. В [package.json](<package.json>) остаются `license: UNLICENSED` и `private: true`; последнее запрещает случайную npm-публикацию, а не определяет видимость репозитория.
 
 ## Preview и загрузки
 
-Готовится публичный **`v0.1.1-preview.1`**, не production-релиз. На момент подготовки этой документации публикация и новая CI-сборка **ещё не подтверждены**. [Страница prerelease](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.1) и прямые ссылки ниже — **ожидаемые адреса после публикации**, до неё могут возвращать 404. Не подменяйте эту версию старыми Actions artifacts `0.1.0`; `/releases/latest` не является адресом preview.
+Готовится публичный **`v0.1.1-preview.2`**, не production-релиз. На момент подготовки этой документации **новые CI/installers и публикация preview.2 ещё не проверены**. [Страница preview.2](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.2) и прямые ссылки ниже — **ожидаемые адреса после публикации**, до неё могут возвращать 404. Lead заполнит фактические результаты отдельно; `/releases/latest` не является адресом preview.
 
-| Платформа | Ожидаемый installer |
+Предыдущий [публичный prerelease `v0.1.1-preview.1`](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.1) опубликован и проверен 2026-11-09: четыре installers и `SHA256SUMS.txt`. Это историческое evidence **только preview.1**, не проверка новой версии. Не подменяйте preview.2 прежними загрузками или Actions artifacts.
+
+| Платформа | Ожидаемый installer preview.2 |
 | --- | --- |
-| Windows x64 | [NSIS .exe](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/chat-desktop-spike-0.1.1-preview.1-win-x64.exe) |
-| macOS Apple Silicon | [DMG arm64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/chat-desktop-spike-0.1.1-preview.1-mac-arm64.dmg) |
-| macOS Intel | [DMG x64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/chat-desktop-spike-0.1.1-preview.1-mac-x64.dmg) |
-| Linux x64 | [AppImage x86_64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/chat-desktop-spike-0.1.1-preview.1-linux-x86_64.AppImage) |
-| Контрольные суммы | [SHA256SUMS.txt — все четыре installer](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.1/SHA256SUMS.txt) |
+| Windows x64 | [NSIS .exe](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.2/chat-desktop-spike-0.1.1-preview.2-win-x64.exe) |
+| macOS Apple Silicon | [DMG arm64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.2/chat-desktop-spike-0.1.1-preview.2-mac-arm64.dmg) |
+| macOS Intel | [DMG x64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.2/chat-desktop-spike-0.1.1-preview.2-mac-x64.dmg) |
+| Linux x64 | [AppImage x86_64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.2/chat-desktop-spike-0.1.1-preview.2-linux-x86_64.AppImage) |
+| Контрольные суммы | [SHA256SUMS.txt — все четыре installer](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.2/SHA256SUMS.txt) |
 
-Сверьте SHA-256 до установки. Preview не имеет доверенной Windows-подписи; macOS использует ad-hoc signing, **без Developer ID и notarization**. Возможны SmartScreen/Gatekeeper warnings или отказ запуска. Не отключайте защиты ОС ради запуска; зафиксируйте отказ как ограничение. Updater не подключён, обновление — вручную.
+Сверьте SHA-256 до установки. Windows preview остаётся unsigned, без доверенной подписи; macOS использует ad-hoc signing, **без Developer ID и notarization**. Возможны SmartScreen/Gatekeeper warnings или отказ запуска. Не отключайте защиты ОС ради запуска; зафиксируйте отказ как ограничение. Updater не подключён, обновление — вручную.
+
+### Что меняется в preview.2
+
+- Новый выразительный (expressive) локальный диалог подтверждения внешнего HTTPS popup: отдельное модальное окно, светлая/тёмная тема ОС, видимые host и полный URL, безопасный фокус на «Отмена» и прокрутка длинного адреса с клавиатуры. Отмена или потеря актуального окна/документа/account не открывает браузер. Подробности — ниже; установленная OS-приёмка ещё не выполнена.
+- Linux получает canonical PNG для главного окна и согласованное имя desktop entry `ru.exz-vps.chat.desktop.spike.desktop`. Badge через LauncherEntry — **best effort**, только при поддержке окружения и совпадающем установленном desktop entry; старые закреплённые launcher-ярлыки могут не обновиться.
+- Сохраняются выпущенные в preview.1 macOS `Cmd+M`/`Cmd+H` и coordinator notification permission: совместное passive-чтение и отдельный explicit request без ослабления проверок актуальности. Это не обещание первого OS prompt, повторного onboarding или показа уведомления.
 
 ## Инструменты и локальная проверка
 
@@ -84,7 +92,13 @@ npm run package:spike
 | [src/notification-permission.ts](<src/notification-permission.ts>), [native addon](<native/notification-permission.mm>) | macOS query/request notification permission в main process; отказ/неизвестность не считаются согласием |
 | [src/media-permissions.ts](<src/media-permissions.ts>) | Отдельное macOS OS-consent для микрофона и камеры только доверенного live main frame |
 
-Remote renderer работает с sandbox/context isolation, без Node integration и webview. Bridge инъецируется только в trusted top-level frame; main отдельно проверяет источник и аргументы IPC. Чужие origin/IdP нельзя открывать внутри окна. Внешняя HTTPS-ссылка может быть открыта в системном браузере только после подтверждения; cookies приложения туда не передаются.
+Remote renderer работает с sandbox/context isolation, без Node integration и webview. Bridge инъецируется только в trusted top-level frame; main отдельно проверяет источник и аргументы IPC. Чужие origin/IdP нельзя открывать внутри окна. Внешний HTTPS popup может быть открыт в системном браузере только после подтверждения; cookies приложения туда не передаются.
+
+### Подтверждение внешних HTTPS-ссылок
+
+[Локальный диалог](<src/external-link-dialog.ts>) и [его документ](<src/external-link-document.ts>) не загружают внешний сайт: отдельная ephemeral session разрешает только один локальный документ, без сетевых запросов и доступа к bridge сайта. Диалог следует светлой/тёмной теме ОС, показывает host и полный URL как текст, а длинный адрес доступен для прокрутки с клавиатуры. Начальный фокус — «Отмена»; Enter подтверждает открытие только на кнопке «Открыть в браузере», не на области адреса.
+
+«Отмена», крестик, Escape и `Cmd/Ctrl+W` закрывают запрос без перехода. Hide/minimize/close родительского окна, смена документа/account, Quit, crash или ошибка загрузки также отменяют его. Main открывает только исходный проверенный HTTPS URL после положительного ответа и повторной проверки текущего документа/account и видимого родительского окна. Это не новый auth flow и не разрешение embedded IdP; фактическое поведение установленного приложения, темы и клавиатуры ещё требует evidence.
 
 ### Уведомления и lifecycle
 
@@ -92,10 +106,16 @@ Remote renderer работает с sandbox/context isolation, без Node integ
 
 - Native API support и принятие запроса не гарантируют banner, звук, центр уведомлений или callback ОС. Влияют разрешения, Focus/DND, desktop environment и signing/identity.
 - Журнал хранит идентификаторы account/event/chat/call, TTL и OS metadata, но не title/body. Он не является архивом сообщений и всё равно содержит чувствительные идентификаторы; Electron session отдельно хранит cookies сайта.
-- Уведомления привязаны к account, дедуплицируются по event ID, заменяются в группе chat/call и ограничены TTL/лимитами. Badge сейчас доступен только на macOS.
+- Уведомления привязаны к account, дедуплицируются по event ID, заменяются в группе chat/call и ограничены TTL/лимитами. Badge поддерживается на macOS и best-effort через Linux LauncherEntry; Windows badge не поддерживается. Успешный ответ API не доказывает видимый счётчик.
 - На macOS `Cmd+M` использует стандартную menu role `minimize`, `Cmd+H` — `hide`; это разные действия, не глобальные hotkeys. `Cmd+W`/крестик скрывают окно, `Cmd+Q` завершает приложение. На Windows/Linux крестик скрывает окно, а при отсутствии tray — сворачивает; macOS roles туда не добавляются. Tray/menu/Dock позволяют вернуть окно. Получение событий зависит от живого renderer и подключения сайта.
 - **«Выход» / Quit завершает процесс и получение новых событий.** Background push/service после Quit не реализован. Activation уже доставленного уведомления после restart — отдельный best-effort сценарий, не гарантия cold-start на каждой ОС.
 - macOS history restoration — best effort. На Windows отсутствует публичный remove-by-ID для старого toast, объект которого потерян после restart; видимый stale toast может остаться, но не должен вести в чужой/истёкший route.
+
+### Linux icon и badge: ограничения окружения
+
+Для главного окна build копирует canonical [PNG-иконку](<build/icons/icon.png>); packaging использует тот же ресурс. Linux runtime и packaging согласованы на desktop entry `ru.exz-vps.chat.desktop.spike.desktop` через `desktopName` и `linux.syncDesktopName`. Это не новая app identity и не новый пользовательский профиль.
+
+Видимый LauncherEntry badge требует поддерживающего dock/taskbar и **установленного `.desktop` с этим точным именем**. Сам по себе запуск AppImage/source/unpacked не гарантирует интеграцию launcher. Старые pins, desktop-entry cache и несовпадающее имя ярлыка могут сохранять прежнюю иконку или не показывать счётчик; может потребоваться заново закрепить корректный установленный launcher. Ни успешный `setBadgeCount`, ни наличие PNG не являются installed Linux acceptance. macOS badge сохраняется, Windows overlay/badge не реализован.
 
 ### Явное macOS-согласие на уведомления
 
@@ -128,7 +148,7 @@ npm run package:linux     # Linux: AppImage x64
 npm run package:dir       # распакованное приложение текущей ОС
 ```
 
-Результат появляется в `release`. Базовое имя: `chat-desktop-spike-0.1.1-preview.1-<os>-<arch>.<ext>` (Linux x64 расширяется packager-ом как `x86_64`). Для публичного распространения эти команды сами по себе недостаточны: нужны отдельные решения о signing, notarization и установленная OS-приёмка.
+Результат появляется в `release`. Базовое имя: `chat-desktop-spike-0.1.1-preview.2-<os>-<arch>.<ext>` (Linux x64 расширяется packager-ом как `x86_64`). Для публичного распространения эти команды сами по себе недостаточны: нужны отдельные решения о signing, notarization и установленная OS-приёмка.
 
 [Desktop CI](<.github/workflows/desktop.yml>) предназначен для тестовых native-сборок на стандартных hosted runners:
 
@@ -155,4 +175,4 @@ Workflow создаёт Actions artifacts `desktop-test-<platform>-<run_id>-<run
 
 Известная оговорка: отдельные audit от 2026-11-08 и 2026-11-09 сообщили moderate advisory [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) в build-time цепочке `minimatch` через packaging tools; high/critical не зафиксированы. Manifest и lock подтверждают devDependency-цепочку; это не утверждение об exploit в renderer. Подробности — в [ACCEPTANCE.md](<ACCEPTANCE.md>). Исправление/override зависимостей здесь не выполнялись. Audit нужно повторять отдельно; закреплённые версии и отсутствие production npm dependencies не означают «уязвимостей нет».
 
-Документация подготовлена для исходного среза preview 2026-11-09. Исторические результаты `0.1.0` не являются результатами этой версии; актуальные проверки и ещё не выполненная release/installed-приёмка разделены в [ACCEPTANCE.md](<ACCEPTANCE.md>). Это не протокол production deployment.
+Документация preview.2 подготовлена 2026-11-12. Исторические результаты `0.1.0` и опубликованного `0.1.1-preview.1` не перенесены в новую версию; новые CI/installers, публикация и installed-приёмка пока не подтверждены. Lead заполняет фактические проверки отдельно в [ACCEPTANCE.md](<ACCEPTANCE.md>). Это не протокол production deployment.

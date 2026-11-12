@@ -14,7 +14,7 @@ if (window.top !== window) {
   let delayPending = false;
 
   function log(label, value) {
-    lines.unshift(`${new Date().toLocaleTimeString()}  ${label}${value === undefined ? "" : ` ${JSON.stringify(value)}`}`);
+    lines.unshift(`${new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" })}  ${label}${value === undefined ? "" : ` ${JSON.stringify(value)}`}`);
     if (lines.length > 100) lines.length = 100;
     events.textContent = lines.join("\n");
   }

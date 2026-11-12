@@ -34,7 +34,7 @@ await mkdir(new URL("../dist/", import.meta.url), { recursive: true });
 await buildNotificationPermission();
 await build({
   absWorkingDir: root,
-  entryPoints: { main: "src/main.ts", preload: "src/preload.ts" },
+  entryPoints: { main: "src/main.ts", preload: "src/preload.ts", "external-link-preload": "src/external-link-preload.ts" },
   outdir: "dist",
   outExtension: { ".js": ".cjs" },
   bundle: true,
@@ -44,6 +44,7 @@ await build({
   external: ["electron"],
   sourcemap: false,
 });
+await cp(new URL("../build/icons/icon.png", import.meta.url), new URL("../dist/app-icon.png", import.meta.url));
 await cp(new URL("../spike/", import.meta.url), new URL("../dist/spike/", import.meta.url), { recursive: true });
 await writeFile(new URL("../dist/desktop-config.json", import.meta.url), JSON.stringify(diagnostic ? { appUrl: null, spike: true } : { appUrl }) + "\n");
 console.log(diagnostic ? "Desktop diagnostic build complete: explicit --spike build, including cold launch" : "Desktop build complete: configured HTTPS origin embedded");

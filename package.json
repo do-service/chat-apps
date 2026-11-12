@@ -1,11 +1,12 @@
 {
   "name": "chat-desktop-spike",
-  "version": "0.1.1-preview.1",
+  "version": "0.1.1-preview.2",
   "private": true,
   "description": "Isolated remote-site desktop notification acceptance spike",
   "author": "Chat",
   "license": "UNLICENSED",
   "main": "dist/main.cjs",
+  "desktopName": "ru.exz-vps.chat.desktop.spike.desktop",
   "engines": {
     "node": ">=24 <25"
   },
