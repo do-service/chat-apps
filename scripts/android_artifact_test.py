@@ -160,6 +160,63 @@ class ArtifactTests(unittest.TestCase):
         self.make_apk(entries)
         self.prepare()
 
+    def test_fixed_phase_diagnostics_keep_exact_stdout_contract(self):
+        args = ["--source", str(self.source), "--apk", str(self.apk), "--output", str(self.output), "--source-commit", "a" * 40, "--workflow-commit", "b" * 40, "--build-tools", str(self.tools)]
+        with contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(artifact.main(args), 0)
+        self.assertEqual(json.loads(stdout.getvalue()), {"files": sorted(artifact.OUTPUT_NAMES)})
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: phase=apk-inspection-ok", "android-artifact: phase=sdk-verification-ok"])
+
+    def test_known_sdk_diagnostics_do_not_allow_candidates_or_leak_content(self):
+        candidates = {"assets/PublicSuffixDatabase.list": "okhttp-public-suffix-db", "messaging_event.proto": "firebase-messaging-event-proto", "messaging_event_extension.proto": "firebase-messaging-event-extension-proto"}
+        payload = b"FakeSecretContent-not-for-public-logs"
+        for name, identifier in candidates.items():
+            self.make_apk(self.entries() + [(name, payload)])
+            with self.subTest(name=name), contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaisesRegex(artifact.VerificationError, "^unexpected APK member$"):
+                    self.prepare()
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", f"android-artifact: rejected-sdk-candidate id={identifier} bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()}"])
+            self.assertNotIn("FakeSecret", stderr.getvalue())
+            self.assertNotIn(str(self.source), stderr.getvalue())
+            self.assertFalse(artifact.package_member(name))
+            self.assertFalse(self.output.exists())
+        self.assertEqual(self.sdk_calls.call_count, 0)
+
+    def test_known_candidate_diagnostic_is_bounded_and_bad_zip_is_redacted(self):
+        name = "assets/PublicSuffixDatabase.list"
+        self.make_apk(self.entries() + [(name, b"x" * (1024 * 1024 + 1))])
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.rejected()
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-sdk-candidate id=okhttp-public-suffix-db metadata=over-limit"])
+        self.make_apk(self.entries() + [(name, b"FakeSecretCrcPayload")])
+        self.apk.write_bytes(self.apk.read_bytes().replace(b"FakeSecretCrcPayload", b"FakeSecretCrcTamper!"))
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.rejected()
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: rejected-sdk-candidate id=okhttp-public-suffix-db metadata=unavailable"])
+        self.assertNotIn("FakeSecret", stderr.getvalue())
+        self.assertNotIn(name, stderr.getvalue())
+
+    def test_failure_diagnostics_never_emit_unknown_names_paths_or_sdk_output(self):
+        args = ["--source", str(self.source), "--apk", str(self.apk), "--output", str(self.output), "--source-commit", "a" * 40, "--workflow-commit", "b" * 40, "--build-tools", str(self.tools)]
+        for name in ["assets/CustomerTokenValue123.bin", "assets/FakeSecret.json"]:
+            self.make_apk(self.entries() + [(name, b"FakeSecretContent")])
+            with contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(artifact.main(args), 1)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: verification failed; no public artifact was accepted"])
+            self.assertNotIn(name, stderr.getvalue())
+            self.assertNotIn(str(self.source), stderr.getvalue())
+            self.assertFalse(self.output.exists())
+        self.make_apk()
+        self.sdk_calls.side_effect = artifact.VerificationError("FakeSecretSdkStdout " + str(self.source))
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(artifact.main(args), 1)
+        self.assertEqual(stderr.getvalue().splitlines(), ["android-artifact: phase=source-bundle-ok", "android-artifact: phase=apk-inspection-ok", "android-artifact: verification failed; no public artifact was accepted"])
+        with mock.patch.object(artifact, "source_bundle", side_effect=artifact.VerificationError("FakeSecretSource " + str(self.source))), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(artifact.main(args), 1)
+        self.assertEqual(stderr.getvalue(), "android-artifact: verification failed; no public artifact was accepted\n")
+
     def test_nonempty_or_arbitrary_generated_extras_rejected(self):
         for name, payload in [("assets/public/cordova.js", b"evil"), ("assets/public/plugins/a.js", b""), ("assets/extra.txt", b"leak")]:
             with self.subTest(name=name):

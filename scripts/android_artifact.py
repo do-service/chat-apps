@@ -45,6 +45,10 @@ REQUIRED_CLASSES = {"Lru/exzvps/chat/mobile/preview/" + name + ";" for name in (
 # Verified installed @capacitor/cli8.6.0 cordova.js136-139,218-230: no-plugin
 # copy creates ONLY these two EMPTY public files, never arbitrary plugin JS.
 EMPTY_CORDOVA = {"assets/public/cordova.js", "assets/public/cordova_plugins.js"}
+# Diagnostics only: these exact public SDK paths remain rejected, not allowlisted.
+REJECTED_SDK_DIAGNOSTICS = {"assets/PublicSuffixDatabase.list": "okhttp-public-suffix-db",
+                            "messaging_event.proto": "firebase-messaging-event-proto",
+                            "messaging_event_extension.proto": "firebase-messaging-event-extension-proto"}
 SDK_PROPERTIES = {name + ".properties" for name in (
     "firebase-annotations", "firebase-appcheck-interop", "firebase-common", "firebase-common-ktx",
     "firebase-components", "firebase-datatransport", "firebase-encoders", "firebase-encoders-json",
@@ -376,6 +380,27 @@ def package_member(name):
     return re.fullmatch(r"META-INF/(?:MANIFEST\.MF|[A-Z0-9_-]{1,32}\.(?:SF|RSA|DSA|EC)|[A-Za-z0-9_.-]+\.(?:version|kotlin_module)|(?:LICENSE|NOTICE)(?:\.[A-Za-z0-9_.-]+)?|com/android/build/gradle/app-metadata\.properties|services/[A-Za-z0-9_.$-]+)", name) is not None
 
 
+def diagnose_rejected_sdk_member(archive, info):
+    identifier = REJECTED_SDK_DIAGNOSTICS.get(info.filename)
+    if identifier is None:
+        return
+    prefix = "android-artifact: rejected-sdk-candidate id=" + identifier
+    limit = 1024 * 1024
+    if info.file_size > limit:
+        print(prefix + " metadata=over-limit", file=sys.stderr)
+        return
+    try:
+        with archive.open(info) as stream:
+            data = stream.read(limit + 1)
+    except (OSError, ValueError, RuntimeError, zipfile.BadZipFile, zlib.error):
+        print(prefix + " metadata=unavailable", file=sys.stderr)
+        return
+    if len(data) > limit or len(data) != info.file_size:
+        print(prefix + " metadata=unavailable", file=sys.stderr)
+        return
+    print(f"{prefix} bytes={len(data)} sha256={hashlib.sha256(data).hexdigest()}", file=sys.stderr)
+
+
 def inspect_apk(candidate, source_files, native_assets):
     seen, found, total = set(), set(), 0
     with zipfile.ZipFile(candidate) as archive:
@@ -402,7 +427,9 @@ def inspect_apk(candidate, source_files, native_assets):
         expected.update(native_assets)
         require(required | expected.keys() <= files.keys(), "APK assets/package incomplete")
         for name, info in files.items():
-            require(name in expected or name in EMPTY_CORDOVA or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or package_member(name), "unexpected APK member")
+            if not (name in expected or name in EMPTY_CORDOVA or name in {"assets/capacitor.config.json", "assets/capacitor.plugins.json"} or package_member(name)):
+                diagnose_rejected_sdk_member(archive, info)
+                raise VerificationError("unexpected APK member")
             if name in EMPTY_CORDOVA and name not in expected:
                 require(info.file_size == 0, "nonempty Cordova generated extra")
             digest = hashlib.sha256()
@@ -468,6 +495,7 @@ def prepare(*, source, apk, output, source_commit, workflow_commit, build_tools)
     size = apk.stat().st_size
     require(0 < size <= MAX_APK, "APK file size limit")
     source_files, native_assets, bundle = source_bundle(source)
+    print("android-artifact: phase=source-bundle-ok", file=sys.stderr)
     temporary = Path(tempfile.mkdtemp(prefix="chat-android-verify-")).resolve()
     parent = Path(tempfile.gettempdir()).resolve()
     require(temporary.parent == parent and temporary.name.startswith("chat-android-verify-"), "unsafe temporary directory")
@@ -487,7 +515,9 @@ def prepare(*, source, apk, output, source_commit, workflow_commit, build_tools)
         require(copied == size, "APK changed during snapshot")
         candidate.chmod(0o400)
         inspect_apk(candidate, source_files, native_assets)
+        print("android-artifact: phase=apk-inspection-ok", file=sys.stderr)
         tools, certificate = tool_metadata(build_tools, candidate)
+        print("android-artifact: phase=sdk-verification-ok", file=sys.stderr)
         require(hashlib.sha256(candidate.read_bytes()).hexdigest() == digest.hexdigest(), "verified APK snapshot changed")
         provenance = {"schema_version": 1, "provenance_signed": False, "statement": "Unsigned build metadata; not an attestation or Android/device acceptance.",
                       "source_commit": source_commit, "workflow_commit": workflow_commit, "capacitor_version": CAPACITOR,
