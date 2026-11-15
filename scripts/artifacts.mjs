@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { appendFile, lstat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { verifyPreviewMetadata } from "./preview-metadata.mjs";
 
 const targets = new Map([
   ["windows", ["win-x64.exe"]],
@@ -10,7 +11,7 @@ const targets = new Map([
   ["linux", ["linux-x86_64.AppImage"]],
 ]);
 
-export async function prepareArtifacts(root, platform) {
+export async function prepareArtifacts(root, platform, { preview = false } = {}) {
   const suffixes = targets.get(platform);
   if (!suffixes) throw new Error("Unknown artifact platform");
   const { version } = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
@@ -20,6 +21,9 @@ export async function prepareArtifacts(root, platform) {
   const release = path.join(root, "release");
   if (!(await lstat(release)).isDirectory()) throw new Error("release must be a regular directory");
   const names = suffixes.map((suffix) => `chat-desktop-spike-${version}-${suffix}`);
+  if (preview && platform !== "macos") {
+    names.push(...await verifyPreviewMetadata(release, platform, names[0], version));
+  }
   const checksums = [];
   for (const name of names) {
     const filename = path.join(release, name);
@@ -36,8 +40,10 @@ export async function prepareArtifacts(root, platform) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
-    if (process.argv.length !== 3) throw new Error("Usage: node scripts/artifacts.mjs <windows|macos|linux>");
-    const paths = (await prepareArtifacts(process.cwd(), process.argv[2])).join("\n") + "\n";
+    if (process.argv.length !== 3 && !(process.argv.length === 4 && process.argv[3] === "--preview")) {
+      throw new Error("Usage: node scripts/artifacts.mjs <windows|macos|linux> [--preview]");
+    }
+    const paths = (await prepareArtifacts(process.cwd(), process.argv[2], { preview: process.argv[3] === "--preview" })).join("\n") + "\n";
     if (process.env.GITHUB_OUTPUT) {
       await appendFile(process.env.GITHUB_OUTPUT, `paths<<DESKTOP_ARTIFACT_PATHS\n${paths}DESKTOP_ARTIFACT_PATHS\n`);
     }

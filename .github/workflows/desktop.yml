@@ -80,9 +80,11 @@ jobs:
         run: npm test
 
       - name: Test artifact allowlist and checksums
-        run: node --test scripts/artifacts.test.mjs
+        run: node --test scripts/artifacts.test.mjs scripts/artifacts-preview.test.mjs scripts/desktop-release-workflow.test.mjs
 
       - name: Build standalone desktop
+        env:
+          DESKTOP_UPDATE_DISTRIBUTION: github-preview
         run: npm run build
 
       # Native x64 test builds reuse the verified installed dist instead of downloading it again.
@@ -106,7 +108,7 @@ jobs:
 
       - name: Verify exact installers and generate SHA-256 manifest
         id: artifacts
-        run: node scripts/artifacts.mjs ${{ matrix.platform }}
+        run: node scripts/artifacts.mjs ${{ matrix.platform }} --preview
 
       - name: Upload test installers and checksums only
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

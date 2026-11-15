@@ -7,6 +7,9 @@ import {
   isCapabilities, isDesktopEvent, isNotificationResult, isTrustedURL, trustedOriginFromArguments,
 } from "./security";
 
+import { isUpdateState, type NativeUpdatesBridge } from "./update-contract";
+import { UPDATE_IPC } from "./update-ipc";
+
 const trustedOrigin = trustedOriginFromArguments(process.argv);
 
 // The preload is bundled into one CJS file because a sandboxed preload cannot require local modules.
@@ -84,4 +87,15 @@ if (process.isMainFrame && window.top === window && trustedOrigin
     },
   };
   contextBridge.exposeInMainWorld("chatDesktop", bridge);
+  const noArguments = (channel: string) => async (...args: unknown[]) => {
+    if (args.length !== 0) throw new Error("Invalid update arguments");
+    const result: unknown = await ipcRenderer.invoke(channel);
+    if (!isUpdateState(result)) throw new Error("Invalid update state");
+    return result;
+  };
+  const updates: NativeUpdatesBridge = {
+    version: 1, getState: noArguments(UPDATE_IPC.getState), check: noArguments(UPDATE_IPC.check),
+    download: noArguments(UPDATE_IPC.download), install: noArguments(UPDATE_IPC.install), openRelease: noArguments(UPDATE_IPC.openRelease),
+  };
+  contextBridge.exposeInMainWorld("chatUpdates", Object.freeze(updates));
 }

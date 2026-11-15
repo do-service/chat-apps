@@ -8,10 +8,13 @@ export type RuntimeConfiguration = {
   trustedOrigin: string;
   profileKey: string;
   partition: string;
+  updateDistribution: "github-preview" | null;
 };
 
 export function parseBuildConfiguration(value: unknown): string | null {
-  if (!isRecord(value) || Object.keys(value).length !== 1 || !("appUrl" in value)) {
+  if (!isRecord(value) || !("appUrl" in value)
+    || !Object.keys(value).every((key) => key === "appUrl" || key === "updateDistribution")
+    || ("updateDistribution" in value && value.updateDistribution !== "github-preview")) {
     throw new Error("Invalid desktop build configuration");
   }
   if (value.appUrl === null) return null;
@@ -43,5 +46,6 @@ export function resolveConfiguration(
   }
   const trustedOrigin = spike ? SPIKE_ORIGIN : new URL(appURL).origin;
   const profileKey = createHash("sha256").update(trustedOrigin).digest("hex");
-  return { spike, appURL, trustedOrigin, profileKey, partition: `persist:chat-desktop-v1-${profileKey}` };
+  const updateDistribution = !spike && isRecord(buildConfiguration) && buildConfiguration.updateDistribution === "github-preview" ? "github-preview" : null;
+  return { spike, appURL, trustedOrigin, profileKey, partition: `persist:chat-desktop-v1-${profileKey}`, updateDistribution };
 }

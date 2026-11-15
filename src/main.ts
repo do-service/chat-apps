@@ -5,10 +5,12 @@ import {
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  APP_ID, BRIDGE_VERSION, IPC, isAuthState, isBadgeCount, isIdentifier, isLoginRequest, isNotificationDismissal, isNotificationKey, isNotificationRequest,
+  APP_ID, BRIDGE_VERSION, IPC, isAuthState, isBadgeCount, isIdentifier, isLoginRequest, isNotificationDismissal, isNotificationKey, isNotificationRequest, isRecord,
   type DesktopAuthState, type DesktopCapabilities, type DesktopEvent, type Platform, type WindowState,
 } from "./contract";
 import { resolveConfiguration, type RuntimeConfiguration } from "./config";
+import { selectServer } from "./server-selection";
+import { readServerSelection, writeServerSelection } from "./server-store";
 import { createElectronNotificationPort } from "./electron-notifications";
 import { coordinateNotificationPermissionController, createNotificationPermissionController, type NotificationPermissionController } from "./notification-permission";
 import { FileMetadataStore } from "./notification-store";
@@ -18,6 +20,9 @@ import { createMediaPermissionPolicy } from "./media-permissions";
 import { AuthFailure, DesktopAuthService } from "./desktop-auth";
 import { createElectronAuthAttempt, installAuthCookieBarrier } from "./electron-auth";
 import { confirmExternalLink } from "./external-link-dialog";
+import { UpdateService, UPDATE_INTERVAL } from "./updates";
+import { createElectronUpdatePort } from "./electron-updates";
+import { UPDATE_IPC } from "./update-ipc";
 import {
   ERROR_URL, SPIKE_ORIGIN, TRUSTED_ORIGIN_ARGUMENT, externalHTTPSURL, isAllowedFrameNavigation, isTrustedSender, isTrustedURL,
   loginNavigationDoor, spikeResource,
@@ -31,7 +36,7 @@ app.enableSandbox();
 
 // Resolve the explicit diagnostic-build marker before Chromium registers custom schemes.
 // OS cold activation does not preserve a manually supplied --spike launch argument.
-const runtimeConfiguration = (() => {
+let runtimeConfiguration = (() => {
   try { return configuration(); } catch { return null; }
 })();
 protocol.registerSchemesAsPrivileged([
@@ -44,6 +49,8 @@ let mediaNavigationGeneration = 0;
 let tray: Tray | null = null;
 let notifications: NotificationService | null = null;
 let desktopAuth: DesktopAuthService | null = null;
+let nativeUpdates: UpdateService | null = null;
+let updateTimer: ReturnType<typeof setInterval> | null = null;
 let compatibilityLogin = false;
 let compatibilityDialog: AbortController | null = null;
 let quitting = false;
@@ -53,8 +60,39 @@ let notificationAccountGeneration = 0;
 let pendingFocus = false;
 let restoreMissingWindow: (() => void) | null = null;
 let externalPrompt: AbortController | null = null;
+let serverPrompt: AbortController | null = null;
+
+function serverSelectionPath(): string {
+  return join(app.getPath("userData"), "server-selection.json");
+}
+
+async function changeServer(config: RuntimeConfiguration): Promise<void> {
+  if (quitting || serverPrompt || config.spike || process.env.DESKTOP_APP_URL !== undefined) return;
+  focusWindow();
+  const parent = mainWindow;
+  if (!parent || parent.isDestroyed()) return;
+  const controller = new AbortController();
+  serverPrompt = controller;
+  try {
+    const selected = await selectServer({ initialURL: config.appURL, parent, signal: controller.signal, switching: true });
+    if (!selected || quitting || controller.signal.aborted || parent !== mainWindow || parent.isDestroyed()) return;
+    const next = configuration(selected);
+    if (next.trustedOrigin === config.trustedOrigin) return;
+    writeServerSelection(serverSelectionPath(), next.appURL);
+    app.relaunch();
+    // An explicit host switch is a full process boundary, never a mutation of a live trust policy.
+    quitting = true;
+    externalPrompt?.abort(); compatibilityDialog?.abort(); desktopAuth?.dispose();
+    app.quit();
+  } catch {
+    diagnostic = "Не удалось сохранить сервер или перезапустить приложение";
+    if (!quitting) dialog.showErrorBox("Смена сервера", "Не удалось сменить сервер. Проверьте доступ к локальным настройкам и повторите попытку.");
+  } finally {
+    if (serverPrompt === controller) serverPrompt = null;
+  }
+}
 let diagnostic = "Запуск прототипа";
-type StartupStage = "configuration" | "waiting-app-ready" | "app-ready" | "creating-session"
+type StartupStage = "configuration" | "waiting-app-ready" | "app-ready" | "selecting-server" | "creating-session"
   | "installing-session-policy" | "session-policy-installed" | "creating-notification-service"
   | "starting-notification-history" | "notification-history-requested" | "registering-ipc"
   | "creating-window" | "window-created" | "installing-window-policy" | "window-policy-installed"
@@ -87,11 +125,11 @@ function platform(): Platform {
   throw new Error("Unsupported desktop platform");
 }
 
-function configuration(): RuntimeConfiguration {
+function configuration(selectedURL?: string): RuntimeConfiguration {
   let build: unknown = { appUrl: null };
   const path = join(__dirname, "desktop-config.json");
   if (existsSync(path)) build = JSON.parse(readFileSync(path, "utf8"));
-  return resolveConfiguration(process.argv, process.env.DESKTOP_APP_URL, build);
+  return resolveConfiguration(process.argv, process.env.DESKTOP_APP_URL ?? selectedURL, build);
 }
 
 function trayIcon(): Electron.NativeImage {
@@ -132,7 +170,7 @@ function authorize(event: IpcMainInvokeEvent, config: RuntimeConfiguration): voi
 }
 
 function registerIPC(
-  config: RuntimeConfiguration, service: NotificationService, badge: boolean, permission: NotificationPermissionController,
+  config: RuntimeConfiguration, service: NotificationService, badge: boolean, permission: NotificationPermissionController, updates: UpdateService,
 ): void {
   const documentGuard = (event: IpcMainInvokeEvent, account: boolean): (() => boolean) => {
     const window = mainWindow;
@@ -166,6 +204,15 @@ function registerIPC(
       } catch { throw new Error("Desktop operation failed"); }
     });
   };
+  handle(UPDATE_IPC.getState, 0, () => updates.getState());
+  for (const action of ["check", "download", "install", "openRelease"] satisfies Array<keyof typeof UPDATE_IPC>) {
+    handle(UPDATE_IPC[action], 0, (_args, event) => {
+      const current = documentGuard(event, false);
+      if (!current() || !foreground()) throw new Error("Update context unavailable");
+      if (action === "install" || action === "openRelease") return updates[action]({ current, foreground });
+      return updates[action]();
+    });
+  }
   handle(IPC.capabilities, 0, (): DesktopCapabilities => ({
     version: BRIDGE_VERSION, platform: platform(), notifications: service.supported(),
     notificationPermission: "unknown", badge, lifecycle: true, productionAuth: !config.spike,
@@ -264,8 +311,30 @@ function installSessionPolicy(ses: Session, config: RuntimeConfiguration): void 
     owner: () => quitting ? null : mainWindow, generation: () => mediaNavigationGeneration,
     system: systemPreferences, diagnose: (message) => { diagnostic = message; },
   });
-  ses.setPermissionRequestHandler(media.request);
-  ses.setPermissionCheckHandler(media.check);
+  const clipboardOriginAgrees = (value: unknown) => value === config.trustedOrigin || value === `${config.trustedOrigin}/`;
+  const clipboardAllowed = (contents: unknown, details: unknown): boolean => {
+    try {
+      if (quitting || config.spike || !config.trustedOrigin.startsWith("https://")
+          || !isRecord(details) || details.isMainFrame !== true) return false;
+      const window = mainWindow;
+      if (!window || window.isDestroyed() || contents !== window.webContents || window.webContents.isDestroyed()) return false;
+      const frame = window.webContents.mainFrame;
+      if (frame.isDestroyed() || frame.parent !== null || frame.origin !== config.trustedOrigin
+          || !isTrustedURL(frame.url, config.trustedOrigin) || window.webContents.getURL() !== frame.url
+          || details.requestingUrl !== frame.url) return false;
+      return (details.securityOrigin === undefined || clipboardOriginAgrees(details.securityOrigin))
+        && (details.requestingOrigin === undefined || clipboardOriginAgrees(details.requestingOrigin))
+        && (details.embeddingOrigin === undefined || clipboardOriginAgrees(details.embeddingOrigin));
+    } catch { return false; }
+  };
+  ses.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (permission === "clipboard-sanitized-write") { callback(clipboardAllowed(contents, details)); return; }
+    media.request(contents, permission, callback, details);
+  });
+  ses.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+    if (permission === "clipboard-sanitized-write") return clipboardOriginAgrees(requestingOrigin) && clipboardAllowed(contents, details);
+    return media.check(contents, permission, requestingOrigin, details);
+  });
   ses.setDevicePermissionHandler(() => false);
   ses.setDisplayMediaRequestHandler((_request, callback) => callback({}));
   ses.on("file-system-access-restricted", (_event, _details, callback) => callback("deny"));
@@ -505,6 +574,8 @@ function installMenus(config: RuntimeConfiguration, service: NotificationService
     { label: "Открыть", click: focusWindow },
     { label: "Скрыть окно", accelerator: "CommandOrControl+W", click: () => mainWindow?.close() },
     { label: "Повторить загрузку", click: loadTarget },
+    { label: "Сменить сервер…", enabled: !config.spike && process.env.DESKTOP_APP_URL === undefined,
+      click: () => { void changeServer(config); } },
     { label: "Диагностика фокуса и ограничений", click: () => { void diagnostics().catch(() => { diagnostic = "Диалог диагностики недоступен"; }); } },
     { label: "Тестовое уведомление (--spike)", enabled: config.spike, click: menuOperation(() => {
       if (!config.spike) return;
@@ -541,7 +612,7 @@ function installMenus(config: RuntimeConfiguration, service: NotificationService
 // Keep the tray/service alive even when renderer window.close() bypasses BrowserWindow's close event.
 // Explicit Quit still proceeds through before-quit and will-quit without relying on window-all-closed.
 app.on("window-all-closed", () => {});
-app.on("before-quit", () => { quitting = true; externalPrompt?.abort(); compatibilityDialog?.abort(); desktopAuth?.dispose(); notifications?.dispose(); });
+app.on("before-quit", () => { quitting = true; serverPrompt?.abort(); if (updateTimer) clearInterval(updateTimer); nativeUpdates?.dispose(); externalPrompt?.abort(); compatibilityDialog?.abort(); desktopAuth?.dispose(); notifications?.dispose(); });
 app.on("will-quit", () => { tray?.destroy(); });
 
 if (!app.requestSingleInstanceLock()) {
@@ -551,18 +622,35 @@ if (!app.requestSingleInstanceLock()) {
   void start().catch(() => {
     // Electron errors can contain URLs with authentication material; never print the raw exception.
     console.error(`Desktop startup failed at stage ${startupStage}`);
-    dialog.showErrorBox("Chat Desktop Spike", `Запуск невозможен. Этап: ${startupStage}. Требуется DESKTOP_APP_URL — HTTPS origin без пути, query, fragment и credentials — или явный --spike. Проверьте сборку и конфигурацию. Системный вход требует обновлённого сервера и отдельной проверки IdP.`);
+    dialog.showErrorBox("Chat Desktop Spike", `Запуск невозможен. Этап: ${startupStage}. Проверьте конфигурацию сборки и доступ к локальным настройкам. Адрес сервера должен быть HTTPS origin без пути, query, fragment и credentials. Если задан DESKTOP_APP_URL, проверьте его значение. Системный вход требует обновлённого сервера и отдельной проверки IdP.`);
     app.exit(1);
   });
 }
 
 async function start(): Promise<void> {
   setStartupStage("configuration");
-  const config = runtimeConfiguration;
-  if (!config) throw new Error("Invalid desktop configuration");
+  if (!runtimeConfiguration) throw new Error("Invalid desktop configuration");
+  let config: RuntimeConfiguration = runtimeConfiguration;
   setStartupStage("waiting-app-ready");
   await app.whenReady();
   setStartupStage("app-ready");
+  if (!config.spike && process.env.DESKTOP_APP_URL === undefined) {
+    setStartupStage("selecting-server");
+    let selected = readServerSelection(serverSelectionPath());
+    if (!selected) {
+      const controller = new AbortController();
+      serverPrompt = controller;
+      try {
+        selected = await selectServer({ initialURL: config.appURL, signal: controller.signal, switching: false });
+        if (quitting || controller.signal.aborted) return;
+        if (!selected) { app.quit(); return; }
+        writeServerSelection(serverSelectionPath(), selected);
+      } finally { if (serverPrompt === controller) serverPrompt = null; }
+    }
+    if (quitting) return;
+    config = configuration(selected);
+    runtimeConfiguration = config;
+  }
   const os = platform();
   setStartupStage("creating-session");
   const ses = session.fromPartition(config.partition);
@@ -593,7 +681,15 @@ async function start(): Promise<void> {
   // Windows taskbar overlays remain unsupported.
   const badge = os === "darwin" || os === "linux";
   setStartupStage("registering-ipc");
-  registerIPC(config, service, badge, permission);
+  const updatePort = createElectronUpdatePort(config, os, { window: () => mainWindow });
+  const updates = new UpdateService({ platform: os, currentVersion: app.getVersion(), mode: updatePort.mode, port: updatePort.port,
+    openRelease: (url) => shell.openExternal(url), prepareQuit: () => {
+      const previous = quitting; quitting = true; externalPrompt?.abort(); compatibilityDialog?.abort();
+      return () => { quitting = previous; };
+    },
+  });
+  nativeUpdates = updates;
+  registerIPC(config, service, badge, permission, updates);
   const createWindow = (showWhenReady: boolean): BrowserWindow => {
     setStartupStage("creating-window");
     const window = new BrowserWindow({
@@ -609,6 +705,7 @@ async function start(): Promise<void> {
     });
     mainWindow = window;
     window.on("focus", () => {
+      void updates.check(true);
       if (os === "darwin") void permission.get(() => !quitting && mainWindow === window).then((status) => {
         if (!quitting && mainWindow === window && status === "granted") void service.restoreNative();
       });
@@ -717,5 +814,8 @@ async function start(): Promise<void> {
   setStartupStage("loading-target");
   loadTarget();
   setStartupStage("load-requested");
+  void updates.check(true);
+  updateTimer = setInterval(() => { void updates.check(true); }, UPDATE_INTERVAL);
+  updateTimer.unref();
   if (pendingFocus) focusWindow();
 }

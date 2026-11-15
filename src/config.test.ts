@@ -7,8 +7,8 @@ import { SPIKE_URL } from "./security";
 test("committed app origin is the user-confirmed site and remains isolated from diagnostics", () => {
   const source: unknown = JSON.parse(readFileSync("app-config.json", "utf8"));
   const remote = resolveConfiguration([], undefined, source);
-  assert.equal(remote.appURL, "https://chat.exz-vps.ru/");
-  assert.equal(remote.trustedOrigin, "https://chat.exz-vps.ru");
+  assert.equal(remote.appURL, "https://chat.krista.ru/");
+  assert.equal(remote.trustedOrigin, "https://chat.krista.ru");
   assert.equal(remote.spike, false);
   const diagnostic = resolveConfiguration(["--spike"], undefined, source);
   assert.equal(diagnostic.appURL, SPIKE_URL);
@@ -48,6 +48,15 @@ test("only an explicit diagnostic build marker enables cold-start spike without 
     assert.throws(() => resolveConfiguration([], "https://chat.example/", value));
   }
   assert.throws(() => resolveConfiguration([], undefined, { appUrl: null }));
+});
+
+test("only an explicit release build marker enables update distribution, never spike or runtime environment", () => {
+  const source = { appUrl: "https://chat.example" };
+  assert.equal(resolveConfiguration([], undefined, source).updateDistribution, null);
+  const release = { ...source, updateDistribution: "github-preview" };
+  assert.equal(resolveConfiguration([], undefined, release).updateDistribution, "github-preview");
+  assert.equal(resolveConfiguration(["--spike"], undefined, release).updateDistribution, null);
+  for (const value of ["preview", "", true, null]) assert.throws(() => resolveConfiguration([], undefined, { ...source, updateDistribution: value }));
 });
 
 test("persistent sessions and metadata are isolated by canonical origin including scheme and port", () => {

@@ -11,7 +11,13 @@ electronFuses:
   enableEmbeddedAsarIntegrityValidation: true
   grantFileProtocolExtraPrivileges: false
 npmRebuild: false
-publish: null
+publish:
+  provider: github
+  owner: do-service
+  repo: chat-apps
+  channel: preview
+  releaseType: prerelease
+  private: false
 directories:
   output: release
   buildResources: build
@@ -20,6 +26,7 @@ files:
   - package.json
 artifactName: chat-desktop-spike-${version}-${os}-${arch}.${ext}
 mac:
+  publish: null
   target:
     - target: dmg
       arch:

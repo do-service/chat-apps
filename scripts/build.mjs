@@ -30,21 +30,26 @@ if (raw !== undefined) {
   appUrl = url.origin;
 }
 
+const distribution = process.env.DESKTOP_UPDATE_DISTRIBUTION;
+if (distribution !== undefined && distribution !== "github-preview") throw new Error("Invalid DESKTOP_UPDATE_DISTRIBUTION");
+if (diagnostic && distribution !== undefined) throw new Error("Diagnostic builds cannot enable update distribution");
+const updateDistribution = distribution === "github-preview" ? { updateDistribution: distribution } : {};
+
 await mkdir(new URL("../dist/", import.meta.url), { recursive: true });
 await buildNotificationPermission();
 await build({
   absWorkingDir: root,
-  entryPoints: { main: "src/main.ts", preload: "src/preload.ts", "external-link-preload": "src/external-link-preload.ts" },
+  entryPoints: { main: "src/main.ts", preload: "src/preload.ts", "external-link-preload": "src/external-link-preload.ts", "server-selection-preload": "src/server-selection-preload.ts" },
   outdir: "dist",
   outExtension: { ".js": ".cjs" },
   bundle: true,
   platform: "node",
   format: "cjs",
   target: "node24",
-  external: ["electron"],
+  external: ["electron", "electron-updater", "electron-updater/*"],
   sourcemap: false,
 });
 await cp(new URL("../build/icons/icon.png", import.meta.url), new URL("../dist/app-icon.png", import.meta.url));
 await cp(new URL("../spike/", import.meta.url), new URL("../dist/spike/", import.meta.url), { recursive: true });
-await writeFile(new URL("../dist/desktop-config.json", import.meta.url), JSON.stringify(diagnostic ? { appUrl: null, spike: true } : { appUrl }) + "\n");
+await writeFile(new URL("../dist/desktop-config.json", import.meta.url), JSON.stringify(diagnostic ? { appUrl: null, spike: true } : { appUrl, ...updateDistribution }) + "\n");
 console.log(diagnostic ? "Desktop diagnostic build complete: explicit --spike build, including cold launch" : "Desktop build complete: configured HTTPS origin embedded");

@@ -4,6 +4,8 @@ import { spawnSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import * as contract from "./contract";
 import * as security from "./security";
+import * as updateContract from "./update-contract";
+import * as updateIPC from "./update-ipc";
 
 const compiled = spawnSync(process.execPath, ["--input-type=module", "-e",
   'import { transformSync } from "esbuild"; import { readFileSync } from "node:fs"; process.stdout.write(transformSync(readFileSync("src/preload.ts", "utf8"), { loader: "ts", format: "cjs", target: "node24" }).code);',
@@ -12,11 +14,11 @@ assert.equal(compiled.status, 0, compiled.stderr);
 
 function fixture(mainFrame = true, origin = "https://chat.example", response: unknown = undefined) {
   const calls: { channel: string; value: unknown }[] = [];
-  let exposed: unknown;
+  const exposed: Record<string, unknown> = {};
   const window = { location: { origin, href: `${origin}/` }, top: {} };
   window.top = window;
   const electron = {
-    contextBridge: { exposeInMainWorld: (_name: string, bridge: unknown) => { exposed = bridge; } },
+    contextBridge: { exposeInMainWorld: (name: string, bridge: unknown) => { exposed[name] = bridge; } },
     ipcRenderer: { invoke: async (channel: string, value: unknown) => { calls.push({ channel, value }); return response; } },
   };
   runInNewContext(compiled.stdout, {
@@ -24,12 +26,13 @@ function fixture(mainFrame = true, origin = "https://chat.example", response: un
       if (name === "electron") return electron;
       if (name === "./contract") return contract;
       if (name === "./security") return security;
+      if (name === "./update-contract") return updateContract;
+      if (name === "./update-ipc") return updateIPC;
       throw new Error(`Unexpected module ${name}`);
     },
     process: { isMainFrame: mainFrame, argv: [`${security.TRUSTED_ORIGIN_ARGUMENT}https://chat.example`] }, window,
   });
-  assert.ok(exposed === undefined || contract.isRecord(exposed));
-  return { calls, bridge: exposed };
+  return { calls, bridge: exposed.chatDesktop, updates: exposed.chatUpdates };
 }
 
 test("preload exposes additive dismiss operation with strict validation before IPC", async () => {
@@ -64,6 +67,25 @@ test("preload exposes permission methods and validates every permission result",
     }
     assert.equal(typeof f.bridge.openNotificationSettings, "function");
   }
+});
+
+test("independent immutable updates bridge validates exact noargs and every snapshot without extending legacy bridge", async () => {
+  const state: updateContract.UpdateState = { version: 1, platform: "darwin", currentVersion: "0.1.0", currentBuild: null, channel: "preview", mode: "external", status: "idle", availableVersion: null, progress: null, error: null };
+  const f = fixture(true, "https://chat.example", state);
+  assert.ok(contract.isRecord(f.updates)); assert.equal(Object.isFrozen(f.updates), true);
+  assert.ok(contract.isRecord(f.bridge)); assert.equal("check" in f.bridge, false);
+  for (const [name, channel] of Object.entries(updateIPC.UPDATE_IPC)) {
+    const method: unknown = f.updates[name]; assert.ok(typeof method === "function");
+    assert.deepEqual(await method(), state); assert.deepEqual(f.calls.at(-1), { channel, value: undefined });
+    const before = f.calls.length;
+    for (const arg of [undefined, null, "https://evil.example/a.exe", {}]) await assert.rejects(async () => method(arg), /Invalid update arguments/);
+    assert.equal(f.calls.length, before);
+    const bad = fixture(true, "https://chat.example", { ...state, url: "https://evil.example" });
+    assert.ok(contract.isRecord(bad.updates)); const invalid: unknown = bad.updates[name]; assert.ok(typeof invalid === "function");
+    await assert.rejects(async () => invalid(), /Invalid update state/);
+  }
+  assert.equal(fixture(false).updates, undefined);
+  assert.equal(fixture(true, "https://attacker.example").updates, undefined);
 });
 
 test("preload does not expose dismiss or any bridge to foreign pages/subframes", () => {

@@ -4,11 +4,15 @@ import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import * as contract from "./contract";
+import { resolveConfiguration } from "./config";
 import * as lifecycle from "./lifecycle";
 import * as mediaPermissions from "./media-permissions";
 import * as notifications from "./notifications";
 import * as notificationPermissions from "./notification-permission";
 import * as security from "./security";
+import * as updates from "./updates";
+import * as updateIPC from "./update-ipc";
+import type { UpdatePort, UpdateContext } from "./updates";
 import type { MenuItemConstructorOptions } from "electron";
 import type { DesktopEvent, WindowState } from "./contract";
 import type { NativeCallbacks, NotificationMetadata, NotificationNativePort } from "./notifications";
@@ -23,10 +27,13 @@ const source = compiled.stdout;
 type MediaStatus = ReturnType<Electron.SystemPreferences["getMediaAccessStatus"]>;
 type MediaKind = "microphone" | "camera";
 type PermissionDetails = Record<string, unknown>;
-type RequestHandler = (contents: unknown, permission: string, callback: (allowed: boolean) => void, details: PermissionDetails) => void;
-type CheckHandler = (contents: unknown, permission: string, requestingOrigin: string, details: PermissionDetails) => boolean;
+type RequestHandler = (contents: unknown, permission: string, callback: (allowed: boolean) => void, details: unknown) => void;
+type CheckHandler = (contents: unknown, permission: string, requestingOrigin: string, details: unknown) => boolean;
 
-async function fixture(cold = false, options: { spike?: boolean; platform?: string; status?: MediaStatus; cameraStatus?: MediaStatus; notificationPermission?: string; realNotificationPermission?: boolean; badgeResult?: boolean } = {}) {
+async function fixture(cold = false, options: { savedServer?: string | null; serverChoice?: string | null; serverWriteFails?: boolean; serverReadFails?: boolean; relaunchFails?: boolean; environmentURL?: string; updates?: boolean; spike?: boolean; platform?: string; status?: MediaStatus; cameraStatus?: MediaStatus; notificationPermission?: string; realNotificationPermission?: boolean; badgeResult?: boolean } = {}) {
+  const serverCalls: string[] = [];
+  const serverPrompts: { initialURL: string; switching: boolean; signal: AbortSignal }[] = [];
+  let serverChoice: () => Promise<string | null> = async () => options.serverChoice ?? null;
   const events: DesktopEvent[] = [];
   const badgeCalls: number[] = [];
   const startupCalls: string[] = [];
@@ -46,9 +53,10 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
   const app = Object.assign(new EventEmitter(), {
     setName() {}, setPath() {}, setAppUserModelId() {}, enableSandbox() {},
     setDesktopName: (name: string) => { startupCalls.push(`desktop-name:${name}`); },
-    getPath: () => "/unused-test-profile", requestSingleInstanceLock: () => true,
+    getPath: () => "/unused-test-profile", getVersion: () => "0.1.0", requestSingleInstanceLock: () => true,
     whenReady: async () => { startupCalls.push("when-ready"); },
-    setBadgeCount: (count: number) => { badgeCalls.push(count); return options.badgeResult ?? true; }, quit() {}, exit() {},
+    setBadgeCount: (count: number) => { badgeCalls.push(count); return options.badgeResult ?? true; },
+    relaunch() { serverCalls.push("relaunch"); if (options.relaunchFails) throw new Error("private-path"); }, quit() { serverCalls.push("quit"); }, exit() {},
   });
   let state: WindowState = { focused: false, visible: false, minimized: true };
   let destroyed = false;
@@ -106,6 +114,8 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
     restore() { state = { ...state, minimized: false }; }
     show() { state = { ...state, visible: true }; }
     focus() { state = { ...state, focused: true }; this.emit("focus"); }
+    hide() { state = { ...state, visible: false }; }
+    minimize() { state = { ...state, minimized: true }; }
     async loadURL() {}
   }
   const ses = Object.assign(new EventEmitter(), {
@@ -138,6 +148,15 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
   let authSuccess: (() => void) | undefined;
   const externalPrompts: { parent: unknown; url: string; signal: AbortSignal }[] = [];
   let confirmLink: (signal: AbortSignal) => Promise<boolean> = async () => false;
+  const updateCalls: string[] = [];
+  let confirmUpdate: (context: UpdateContext) => Promise<boolean> = async () => true;
+  let updateInstall: (failed: () => void) => void = () => { updateCalls.push("install"); };
+  const updatePort: UpdatePort = {
+    check: async () => { updateCalls.push("check"); return { version: "0.1.1-preview.3", releaseURL: "https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.3" }; },
+    download: async () => { updateCalls.push("download"); },
+    confirm: (context) => { updateCalls.push("confirm"); return confirmUpdate(context); },
+    install: (failed) => updateInstall(failed), dispose: () => { updateCalls.push("dispose"); },
+  };
   const modules: Record<string, unknown> = {
     electron: {
       app, BrowserWindow: Window, ipcMain: { handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => handlers.set(channel, handler) },
@@ -152,13 +171,31 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
       nativeImage: { createFromBitmap: () => image("bitmap"), createFromPath: (path: string) => image(path) },
       powerMonitor: power, protocol: { registerSchemesAsPrivileged() {} }, session: { fromPartition: () => ses },
       shell: { openExternal: async (url: string) => { notificationCalls.push(url); } }, dialog: {
-        showErrorBox: () => { throw new Error("Unexpected startup failure"); },
+        showErrorBox: (_title: string, message: string) => { messages.push({ message }); },
         showMessageBox: async (value: { message: string }) => { messages.push(value); return { response: 0 }; },
       }, Tray,
     },
     "node:fs": { existsSync: () => false }, "node:path": { join: (...parts: string[]) => parts.join("/") },
+    "./server-store": {
+      readServerSelection: () => {
+        serverCalls.push("read");
+        if (options.serverReadFails) throw new Error("private-path");
+        return options.savedServer === undefined ? `${origin}/` : options.savedServer;
+      },
+      writeServerSelection: (_path: string, url: string) => {
+        serverCalls.push(`save:${url}`);
+        if (options.serverWriteFails) throw new Error("private-path");
+      },
+    },
+    "./server-selection": { selectServer: (request: (typeof serverPrompts)[number]) => {
+      serverPrompts.push(request); return serverChoice();
+    } },
     "./contract": contract, "./security": security, "./lifecycle": lifecycle, "./media-permissions": mediaPermissions, "./notifications": notifications,
-    "./config": { resolveConfiguration: () => ({ spike: options.spike ?? true, trustedOrigin: origin, appURL: `${origin}/`, partition: "test", profileKey: "test" }) },
+    "./updates": updates, "./update-ipc": updateIPC,
+    "./electron-updates": { createElectronUpdatePort: () => ({ mode: options.updates ? "install" : "unconfigured", port: updatePort }) },
+    "./config": { resolveConfiguration: (_args: string[], url: string | undefined) => options.spike === false
+      ? resolveConfiguration([], url, { appUrl: origin })
+      : { spike: true, trustedOrigin: origin, appURL: `${origin}/`, partition: "test", profileKey: "test" } },
     "./electron-notifications": { createElectronNotificationPort: () => native },
     "./notification-permission": {
       ...notificationPermissions,
@@ -180,11 +217,12 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
   };
   runInNewContext(source, {
     require: (name: string) => { if (!(name in modules)) throw new Error(`Unexpected module ${name}`); return modules[name]; },
-    __dirname: "/unused-test-bundle", process: { platform: options.platform ?? "darwin", argv: [], env: {} },
-    console: { info() {}, error() {} }, Buffer, AbortController, setImmediate, setTimeout, clearTimeout,
+    __dirname: "/unused-test-bundle", process: { platform: options.platform ?? "darwin", argv: [], env: options.environmentURL === undefined ? {} : { DESKTOP_APP_URL: options.environmentURL } },
+    console: { info() {}, error() {} }, Buffer, AbortController, setImmediate, setTimeout, clearTimeout, setInterval, clearInterval,
   });
   await new Promise<void>((done) => setImmediate(done));
-  assert.ok(handlers.has(contract.IPC.ready));
+  if (!options.serverReadFails && !(options.savedServer === null && options.serverWriteFails)
+    && (options.savedServer !== null || options.serverChoice)) assert.ok(handlers.has(contract.IPC.ready));
   const sender = { sender: contents, senderFrame: frame };
   const invoke = (channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel); assert.ok(handler, `Missing handler ${channel}`);
@@ -195,6 +233,11 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
     click: () => { assert.ok(callbacks); callbacks.click(); },
     contents, frame, osCalls, notificationCalls, applicationMenus, trayMenus, createdNotifications,
     badgeCalls, startupCalls, windowOptions, images, trayImages, messages, externalPrompts,
+    updateCalls, serverCalls, serverPrompts,
+    setServerChoice: (choose: typeof serverChoice) => { serverChoice = choose; },
+    setUpdateConfirmation: (value: typeof confirmUpdate) => { confirmUpdate = value; },
+    setUpdateInstall: (value: typeof updateInstall) => { updateInstall = value; },
+    close: () => { let prevented = false; assert.ok(rootWindow); rootWindow.emit("close", { preventDefault: () => { prevented = true; } }); return prevented; },
     setLinkConfirmation: (value: typeof confirmLink) => { confirmLink = value; },
     popup: (url: string, postBody?: Electron.PostBody) => {
       assert.ok(windowOpen);
@@ -218,13 +261,13 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
       contents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
       frame.url = url;
     },
-    request: (details: PermissionDetails, permission = "media", senderContents: unknown = contents) => {
+    request: (details: unknown, permission = "media", senderContents: unknown = contents) => {
       assert.ok(requestHandler);
       const answers: boolean[] = [];
       requestHandler(senderContents, permission, (allowed) => answers.push(allowed), details);
       return answers;
     },
-    check: (details: PermissionDetails, permission = "media", senderContents: unknown = contents, requestingOrigin = origin) => {
+    check: (details: unknown, permission = "media", senderContents: unknown = contents, requestingOrigin = origin) => {
       assert.ok(checkHandler); return checkHandler(senderContents, permission, requestingOrigin, details);
     },
     device: () => { assert.ok(deviceHandler); return deviceHandler(); },
@@ -238,6 +281,53 @@ async function fixture(cold = false, options: { spike?: boolean; platform?: stri
     },
   };
 }
+
+test("updates IPC keeps exact noargs, trusted main document and foreground mutation guards", async () => {
+  const f = await fixture(false, { updates: true });
+  try {
+    for (const channel of Object.values(updateIPC.UPDATE_IPC)) assert.throws(() => f.invoke(channel, undefined), /arguments/);
+    assert.throws(() => f.invoke(updateIPC.UPDATE_IPC.download), /operation failed/);
+    const get = f.handlers.get(updateIPC.UPDATE_IPC.getState); assert.ok(get);
+    assert.throws(() => get({ sender: {}, senderFrame: f.frame }), /sender rejected/);
+    f.setFrameParent({}); assert.throws(() => f.invoke(updateIPC.UPDATE_IPC.getState), /sender rejected/); f.setFrameParent(null);
+    f.setState({ focused: true, visible: true, minimized: false });
+    await f.invoke(updateIPC.UPDATE_IPC.download); await settle();
+    assert.deepEqual(f.updateCalls, ["check", "download"]);
+    const caps: unknown = await f.invoke(contract.IPC.capabilities); assert.ok(contract.isRecord(caps)); assert.equal(Object.keys(caps).length, 7);
+  } finally { f.stop(); }
+});
+
+test("update install prepares quit before upstream close-to-hide and rolls back on event failure", async () => {
+  const f = await fixture(false, { updates: true });
+  try {
+    f.setState({ focused: true, visible: true, minimized: false }); await f.invoke(updateIPC.UPDATE_IPC.download); await settle();
+    let closePrevented: boolean | undefined;
+    f.setUpdateInstall((failed) => { closePrevented = f.close(); failed(); });
+    await f.invoke(updateIPC.UPDATE_IPC.install); assert.equal(closePrevented, false);
+    assert.equal(f.close(), true, "failed installer must restore ordinary close-to-hide");
+    f.setState({ focused: true, visible: true, minimized: false });
+    f.setUpdateInstall(() => { closePrevented = f.close(); });
+    await f.invoke(updateIPC.UPDATE_IPC.install); assert.equal(closePrevented, false, "explicit retry retains downloaded installer");
+    assert.equal(f.updateCalls.filter((call) => call === "confirm").length, 2);
+  } finally { f.stop(); }
+});
+
+test("late native updater consent cannot survive navigation, account change, hidden window or Quit", async () => {
+  for (const invalidate of ["navigation", "account", "hidden", "quit"]) {
+    const f = await fixture(false, { updates: true });
+    try {
+      f.setState({ focused: true, visible: true, minimized: false }); await f.invoke(updateIPC.UPDATE_IPC.download); await settle();
+      let finish: ((value: boolean) => void) | undefined;
+      f.setUpdateConfirmation(() => new Promise((resolve) => { finish = resolve; }));
+      const pending = f.invoke(updateIPC.UPDATE_IPC.install); assert.ok(finish);
+      if (invalidate === "navigation") f.navigate();
+      if (invalidate === "account") f.invoke(contract.IPC.setAccount, "alice");
+      if (invalidate === "hidden") f.setState({ focused: false, visible: false, minimized: false });
+      if (invalidate === "quit") f.stop();
+      finish(true); await pending; assert.equal(f.updateCalls.includes("install"), false);
+    } finally { f.stop(); }
+  }
+});
 
 test("external HTTPS link uses the custom dialog and opens only the original confirmed URL", async () => {
   const f = await fixture();
@@ -469,7 +559,7 @@ for (const platform of ["darwin", "win32", "linux"]) {
       const application = menu.find((item) => item.label === "Chat Desktop Spike"); assert.ok(Array.isArray(application?.submenu));
       const tray = f.trayMenus[0]; assert.ok(tray);
       assert.deepEqual(Array.from(tray, (item) => item.label ?? item.type), [
-        "Открыть", "Скрыть окно", "Повторить загрузку", "Диагностика фокуса и ограничений",
+        "Открыть", "Скрыть окно", "Повторить загрузку", "Сменить сервер…", "Диагностика фокуса и ограничений",
         "Тестовое уведомление (--spike)", "Очистить уведомления", "separator", "Выход",
       ]);
       assert.equal(tray.some((item) => item.role === "hide" || item.role === "minimize"), false);
@@ -679,6 +769,105 @@ for (const permission of ["denied", "unknown", "not-determined"]) {
       });
       assert.deepEqual(structuredClone(result), { accepted: false, reason: "failed" });
       assert.equal(f.notificationCalls.includes("request"), false);
+    } finally { f.stop(); }
+  });
+}
+
+const clipboardDetails = () => ({ isMainFrame: true, requestingUrl: `${origin}/` });
+
+for (const platform of ["darwin", "win32", "linux"]) {
+  test(`${platform} main session allows only sanitized clipboard writes for the live trusted HTTPS document`, async () => {
+    const f = await fixture(false, { spike: false, platform });
+    try {
+      for (const serializedOrigin of [origin, `${origin}/`]) {
+        for (const details of [clipboardDetails(), { ...clipboardDetails(), securityOrigin: serializedOrigin,
+          requestingOrigin: serializedOrigin, embeddingOrigin: serializedOrigin }]) {
+          assert.deepEqual(f.request(details, "clipboard-sanitized-write"), [true]);
+          assert.equal(f.check(details, "clipboard-sanitized-write", f.contents, serializedOrigin), true);
+        }
+      }
+      f.frame.url = `${origin}/chat/123?view=thread#message`;
+      const details = { ...clipboardDetails(), requestingUrl: f.frame.url };
+      assert.deepEqual(f.request(details, "clipboard-sanitized-write"), [true]);
+      assert.equal(f.check(details, "clipboard-sanitized-write"), true);
+      for (const permission of ["clipboard-read", "deprecated-sync-clipboard-read", "clipboard-write", "notifications", "display-capture", "unknown"]) {
+        assert.deepEqual(f.request(details, permission), [false]);
+        assert.equal(f.check(details, permission), false);
+      }
+      assert.equal(f.device(), false); assert.equal(JSON.stringify(f.display()), "[{}]");
+      assert.deepEqual(f.osCalls, []);
+    } finally { f.stop(); }
+  });
+
+  for (const [name, invalid] of [
+    ["iframe", { isMainFrame: false }], ["missing main-frame flag", { isMainFrame: undefined }],
+    ["non-boolean main-frame flag", { isMainFrame: "true" }],
+    ["worker without URL", { requestingUrl: undefined }], ["non-string URL", { requestingUrl: 1 }],
+    ["foreign URL", { requestingUrl: "https://attacker.example/" }],
+    ["stale same-origin document", { requestingUrl: `${origin}/other` }],
+    ["opaque URL", { requestingUrl: "about:blank" }],
+    ...["securityOrigin", "requestingOrigin", "embeddingOrigin"].flatMap((key) =>
+      ["null", "", "https://attacker.example", `${origin}/other`, null, 1].map((value) =>
+        [`invalid ${key} ${String(value)}`, { [key]: value }] satisfies [string, PermissionDetails])),
+  ] satisfies [string, PermissionDetails][]) {
+    test(`${platform} main clipboard denies ${name}`, async () => {
+      const f = await fixture(false, { spike: false, platform });
+      try {
+        const details = { ...clipboardDetails(), ...invalid };
+        assert.deepEqual(f.request(details, "clipboard-sanitized-write"), [false]);
+        assert.equal(f.check(details, "clipboard-sanitized-write"), false);
+        assert.deepEqual(f.osCalls, []);
+      } finally { f.stop(); }
+    });
+  }
+
+  for (const change of ["spike", "quit", "closed", "dead-window", "dead-contents", "dead-frame", "parented-frame",
+    "opaque-origin", "foreign-origin", "foreign-url", "http-url", "error-url", "spike-url", "blank-url", "credentials-url", "contents-url", "throwing-frame", "throwing-contents"]) {
+    test(`${platform} main clipboard denies unavailable context ${change}`, async () => {
+      const f = await fixture(false, { spike: change === "spike", platform });
+      try {
+        switch (change) {
+          case "quit": f.stop(); break;
+          case "closed": f.windowEvent("closed"); break;
+          case "dead-window": f.destroyWindow(); break;
+          case "dead-contents": f.destroyContents(); break;
+          case "dead-frame": f.destroyFrame(); break;
+          case "parented-frame": f.setFrameParent({}); break;
+          case "opaque-origin": f.frame.origin = "null"; break;
+          case "foreign-origin": f.frame.origin = "https://attacker.example"; break;
+          case "foreign-url": f.frame.url = "https://attacker.example/"; break;
+          case "http-url": f.frame.url = "http://chat.example/"; break;
+          case "error-url": f.frame.url = security.ERROR_URL; break;
+          case "spike-url": f.frame.url = `${security.SPIKE_ORIGIN}/`; break;
+          case "blank-url": f.frame.url = "about:blank"; break;
+          case "credentials-url": f.frame.url = "https://user:password@chat.example/"; break;
+          case "contents-url": f.setContentsURL(`${origin}/other`); break;
+          case "throwing-frame": f.frame.isDestroyed = () => { throw new Error("secret frame error"); }; break;
+          case "throwing-contents": f.contents.getURL = () => { throw new Error("secret contents error"); }; break;
+        }
+        const details = { ...clipboardDetails(), requestingUrl: f.frame.url };
+        assert.deepEqual(f.request(details, "clipboard-sanitized-write"), [false]);
+        assert.equal(f.check(details, "clipboard-sanitized-write"), false);
+        assert.deepEqual(f.osCalls, []);
+      } finally { f.stop(); }
+    });
+  }
+
+  test(`${platform} main clipboard rejects foreign contents, malformed details and check origins`, async () => {
+    const f = await fixture(false, { spike: false, platform });
+    try {
+      for (const contents of [null, {}, Object.assign(new EventEmitter(), { ...f.contents })]) {
+        assert.deepEqual(f.request(clipboardDetails(), "clipboard-sanitized-write", contents), [false]);
+        assert.equal(f.check(clipboardDetails(), "clipboard-sanitized-write", contents), false);
+      }
+      for (const details of [null, undefined, true, 1, "", {}, [], { get isMainFrame() { throw new Error("secret metadata error"); } }]) {
+        assert.deepEqual(f.request(details, "clipboard-sanitized-write"), [false]);
+        assert.equal(f.check(details, "clipboard-sanitized-write"), false);
+      }
+      for (const requestingOrigin of ["null", "", "https://attacker.example", `${origin}/other`, `${origin}//`]) {
+        assert.equal(f.check(clipboardDetails(), "clipboard-sanitized-write", f.contents, requestingOrigin), false);
+      }
+      assert.deepEqual(f.osCalls, []);
     } finally { f.stop(); }
   });
 }
@@ -1185,6 +1374,122 @@ test("resume refreshes native state before resume event and never sends lifecycl
     const current = { focused: false, visible: false, minimized: true };
     f.setState(current); f.power.emit("resume");
     assert.deepEqual(f.events, [{ type: "window-state", state: current }, { type: "resume" }]);
+  } finally { f.stop(); }
+});
+
+test("server selection gates first remote startup and persists only explicit choice", async () => {
+  const f = await fixture(false, { spike: false, savedServer: null, serverChoice: "https://other.example/" });
+  try {
+    assert.equal(f.serverPrompts.length, 1);
+    assert.equal(f.serverPrompts[0]?.switching, false);
+    assert.deepEqual(f.serverCalls, ["read", "save:https://other.example/"]);
+    assert.equal(f.windowOptions.length, 1);
+    assert.equal(f.windowOptions[0]?.webPreferences?.additionalArguments?.[0],
+      "--chat-desktop-trusted-origin=https://other.example");
+  } finally { f.stop(); }
+});
+
+test("cancelling first selection quits without creating remote session or window", async () => {
+  const f = await fixture(false, { spike: false, savedServer: null });
+  try {
+    assert.deepEqual(f.serverCalls, ["read", "quit"]);
+    assert.equal(f.windowOptions.length, 0);
+    assert.equal(f.handlers.size, 0);
+  } finally { f.stop(); }
+});
+
+test("saved remote server skips picker while diagnostic mode does not read settings", async () => {
+  for (const spike of [true, false]) {
+    const f = await fixture(false, { spike });
+    try {
+      assert.equal(f.serverPrompts.length, 0);
+      assert.deepEqual(f.serverCalls, spike ? [] : ["read"]);
+    } finally { f.stop(); }
+  }
+});
+
+test("server switch is shared by application and tray menus and relaunches only after persistence", async () => {
+  const f = await fixture(false, { spike: false });
+  try {
+    const menu = f.trayMenus[0]?.find((item) => item.label === "Сменить сервер…");
+    assert.ok(menu?.click);
+    assert.notEqual(menu.enabled, false);
+    f.setServerChoice(async () => "https://other.example/");
+    // Electron supplies context arguments; the menu action does not consume them.
+    Reflect.apply(menu.click, undefined, []);
+    await new Promise<void>((done) => setImmediate(done));
+    assert.equal(f.serverPrompts.length, 1);
+    assert.equal(f.serverPrompts[0]?.switching, true);
+    assert.deepEqual(f.serverCalls, ["read", "save:https://other.example/", "relaunch", "quit"]);
+  } finally { f.stop(); }
+});
+
+test("cancelled or failed server changes never relaunch and duplicate prompts are coalesced", async () => {
+  for (const serverWriteFails of [false, true]) {
+    const f = await fixture(false, { spike: false, serverWriteFails });
+    try {
+      const menu = f.trayMenus[0]?.find((item) => item.label === "Сменить сервер…"); assert.ok(menu?.click);
+      let answer: ((url: string | null) => void) | undefined;
+      f.setServerChoice(() => new Promise((resolve) => { answer = resolve; }));
+      Reflect.apply(menu.click, undefined, []); Reflect.apply(menu.click, undefined, []);
+      assert.equal(f.serverPrompts.length, 1);
+      assert.ok(answer); answer(serverWriteFails ? "https://other.example/" : null);
+      await new Promise<void>((done) => setImmediate(done));
+      assert.equal(f.serverCalls.includes("relaunch"), false);
+      assert.equal(f.serverCalls.includes("quit"), false);
+    } finally { f.stop(); }
+  }
+});
+
+test("runtime environment pins the server without reading or rewriting saved selection", async () => {
+  const f = await fixture(false, { spike: false, savedServer: null, environmentURL: "https://pinned.example/" });
+  try {
+    assert.deepEqual(f.serverCalls, []);
+    assert.equal(f.serverPrompts.length, 0);
+    assert.equal(f.windowOptions[0]?.webPreferences?.additionalArguments?.[0], "--chat-desktop-trusted-origin=https://pinned.example");
+    assert.equal(f.trayMenus[0]?.find((item) => item.label === "Сменить сервер…")?.enabled, false);
+  } finally { f.stop(); }
+});
+
+test("same server or late choice after Quit cannot restart or save", async () => {
+  for (const quit of [false, true]) {
+    const f = await fixture(false, { spike: false });
+    try {
+      const menu = f.trayMenus[0]?.find((item) => item.label === "Сменить сервер…"); assert.ok(menu?.click);
+      let answer: ((url: string | null) => void) | undefined;
+      f.setServerChoice(() => new Promise((resolve) => { answer = resolve; }));
+      Reflect.apply(menu.click, undefined, []);
+      if (quit) f.stop();
+      assert.ok(answer); answer(quit ? "https://other.example/" : `${origin}/`);
+      await new Promise<void>((done) => setImmediate(done));
+      assert.deepEqual(f.serverCalls, ["read"]);
+      if (quit) assert.equal(f.serverPrompts[0]?.signal.aborted, true);
+    } finally { f.stop(); }
+  }
+});
+
+test("startup settings I/O failures never create a remote window or expose exception details", async () => {
+  for (const failure of [{ serverReadFails: true }, { serverWriteFails: true }]) {
+    const f = await fixture(false, { spike: false, savedServer: null, serverChoice: "https://other.example/", ...failure });
+    try {
+      assert.equal(f.windowOptions.length, 0);
+      assert.equal(f.handlers.size, 0);
+      assert.equal(f.messages.length, 1);
+      assert.equal(f.messages[0]?.message.includes("private-path"), false);
+    } finally { f.stop(); }
+  }
+});
+
+test("relaunch failure leaves the current remote document usable and reports only a safe error", async () => {
+  const f = await fixture(false, { spike: false, relaunchFails: true });
+  try {
+    f.setServerChoice(async () => "https://other.example/");
+    const menu = f.trayMenus[0]?.find((item) => item.label === "Сменить сервер…"); assert.ok(menu?.click);
+    Reflect.apply(menu.click, undefined, []);
+    await new Promise<void>((done) => setImmediate(done));
+    assert.equal(f.serverCalls.includes("quit"), false);
+    assert.ok(f.invoke(contract.IPC.capabilities));
+    assert.equal(f.messages[0]?.message.includes("private-path"), false);
   } finally { f.stop(); }
 });
 
