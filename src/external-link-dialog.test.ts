@@ -132,6 +132,7 @@ function assertClean(f: ReturnType<typeof fixture>) {
 test("frameless opaque modal uses hardened preferences, private session, no menu, and waits for ready-to-show", async () => {
   const f = fixture(); const result = f.start(); const child = f.child();
   assert.equal(child.options.parent, f.parent);
+  assert.equal(child.options.icon, path.join("/test-dist", "app-icon.png"));
   for (const [key, value] of Object.entries({ modal: true, frame: false, show: false, transparent: false, resizable: false })) {
     assert.equal(Reflect.get(child.options, key), value, key);
   }

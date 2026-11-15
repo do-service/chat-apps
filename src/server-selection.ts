@@ -71,7 +71,7 @@ export function selectServer(options: { initialURL: string; parent?: BrowserWind
         backgroundColor: nativeTheme.shouldUseDarkColors ? "#23262f" : "#ffffff",
         width: 540, height: 460, useContentSize: true, resizable: false, minimizable: false, maximizable: false,
         fullscreenable: false, skipTaskbar: parent !== undefined, autoHideMenuBar: true, thickFrame: false,
-        title: "Сервер Чата",
+        title: "Сервер Чата", icon: join(__dirname, "app-icon.png"),
         webPreferences: {
           session: isolatedSession, preload: join(__dirname, "server-selection-preload.cjs"),
           additionalArguments: [`--chat-server-selection-token=${token}`, `--chat-server-selection-document=${documentId}`],

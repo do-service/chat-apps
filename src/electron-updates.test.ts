@@ -121,7 +121,7 @@ test("desktop eligibility requires embedded distribution + packaged + fixed feed
   assert.equal(fixture("darwin").instances.length, 0);
 });
 
-test("AppImage eligibility requires a real owned executable writable type-2 image, not a symlink or arbitrary path", () => {
+test("AppImage eligibility requires a real owned writable type-2 image, not a symlink or arbitrary path", async (t) => {
   const f = fixture("linux", true, true);
   const parent = filesystem.realpathSync(tmpdir());
   const directory = filesystem.mkdtempSync(paths.join(parent, "chat-appimage-policy-"));
@@ -133,8 +133,12 @@ test("AppImage eligibility requires a real owned executable writable type-2 imag
     assert.equal(f.writable(image), true);
     const link = paths.join(directory, "Link.AppImage"); filesystem.symlinkSync(image, link);
     for (const value of [undefined, "relative.AppImage", directory, link, paths.join(directory, "missing.AppImage"), image + "\0"]) assert.equal(f.writable(value), false);
-    filesystem.chmodSync(image, 0o600); assert.equal(f.writable(image), false);
-    filesystem.chmodSync(image, 0o700); filesystem.writeFileSync(image, "not-an-AppImage"); assert.equal(f.writable(image), false);
+    // Windows ignores POSIX execute bits; the actual AppImage installer is selected only for Linux.
+    await t.test("POSIX executable permission is required", { skip: process.platform === "win32" && "Windows access(X_OK) does not enforce POSIX execute bits" }, () => {
+      filesystem.chmodSync(image, 0o600); assert.equal(f.writable(image), false);
+      filesystem.chmodSync(image, 0o700); assert.equal(f.writable(image), true);
+    });
+    filesystem.writeFileSync(image, "not-an-AppImage"); assert.equal(f.writable(image), false);
   } finally {
     const target = filesystem.realpathSync(directory);
     assert.equal(target, directory); assert.equal(paths.dirname(target), parent); assert.ok(paths.basename(target).startsWith("chat-appimage-policy-"));

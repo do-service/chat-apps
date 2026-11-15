@@ -20,18 +20,25 @@ function fixture() {
     cleanup() { const target = realpathSync(directory); assert.equal(target, directory); assert.equal(dirname(target), parent); assert.ok(basename(target).startsWith("chat-atomic-update-")); rmSync(target, { recursive: true }); } };
 }
 
-test("AppImage policy rejects symlinks, wrong magic, non-executable and relative paths", () => {
+test("AppImage policy rejects symlinks, wrong magic and relative paths", async (t) => {
   const f = fixture();
   try {
     assert.equal(writableAppImage(f.image), true);
     const link = join(f.directory, "Link.AppImage"); symlinkSync(f.image, link);
     for (const value of [undefined, "relative.AppImage", f.directory, link, f.image + "\0"]) assert.equal(writableAppImage(value), false);
-    chmodSync(f.image, 0o600); assert.equal(writableAppImage(f.image), false);
-    chmodSync(f.image, 0o700); writeFileSync(f.image, "not-an-AppImage"); assert.equal(writableAppImage(f.image), false);
+    await t.test("POSIX executable permission is required", { skip: process.platform === "win32" && "Windows access(X_OK) does not enforce POSIX execute bits" }, () => {
+      chmodSync(f.image, 0o600); assert.equal(writableAppImage(f.image), false);
+      chmodSync(f.image, 0o700); assert.equal(writableAppImage(f.image), true);
+    });
+    writeFileSync(f.image, "not-an-AppImage"); assert.equal(writableAppImage(f.image), false);
   } finally { f.cleanup(); }
 });
 
-test("atomic AppImage install preserves its path, verifies copied bytes and retains no ordinary staging", () => {
+// These real-filesystem AppImage transactions exercise POSIX directory fsync, unavailable on Windows.
+// createElectronUpdatePort selects this installer only for Linux, never for the Windows NSIS path.
+const posixAppImageInstall = { skip: process.platform === "win32" && "AppImage installation requires POSIX directory fsync; Windows uses NSIS" };
+
+test("atomic AppImage install preserves its path, verifies copied bytes and retains no ordinary staging", posixAppImageInstall, () => {
   const f = fixture();
   try {
     const launches: string[] = [];
@@ -44,6 +51,7 @@ test("atomic AppImage install preserves its path, verifies copied bytes and reta
 test("missing, wrong-size or wrong-hash cache never removes the installed AppImage and is redownloadable", () => {
   const f = fixture();
   try {
+    verifyCachedInstaller(f.installer, f.integrity);
     for (const [path, integrity] of [[join(f.directory, "missing.AppImage"), f.integrity], [f.installer, { ...f.integrity, size: 1 }], [f.installer, { ...f.integrity, sha512: Buffer.alloc(64).toString("base64") }]] satisfies Array<[string, typeof f.integrity]>) {
       assert.throws(() => verifyCachedInstaller(path, integrity), updateCacheFailure);
       assert.throws(() => installAppImage(f.image, path, integrity, () => { throw new Error("must not launch"); }), updateCacheFailure);
@@ -69,7 +77,7 @@ test("hash-bound but wrong-architecture or non-AppImage cache is rejected before
   }
 });
 
-test("same-directory rename/link/fsync failures preserve the previous binary; relaunch failure restores it", () => {
+test("same-directory rename/link/fsync failures preserve the previous binary; relaunch failure restores it", posixAppImageInstall, () => {
   for (const failure of ["rename", "link", "sync", "relaunch"]) {
     const f = fixture();
     try {
@@ -82,7 +90,7 @@ test("same-directory rename/link/fsync failures preserve the previous binary; re
   }
 });
 
-test("failed rollback retains the previous hardlinked binary and never deletes the replacement", () => {
+test("failed rollback retains the previous hardlinked binary and never deletes the replacement", posixAppImageInstall, () => {
   const f = fixture();
   try {
     assert.throws(() => installAppImage(f.image, f.installer, f.integrity, () => { throw new Error("synthetic relaunch failure"); }, {

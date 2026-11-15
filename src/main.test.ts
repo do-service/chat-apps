@@ -476,15 +476,15 @@ for (const platform of ["linux", "darwin", "win32"]) {
     } finally { f.stop(); }
   });
 
-  test(`${platform} keeps macOS template and Windows branding, using bundled logo only on Linux`, async () => {
+  test(`${platform} uses the same bundled color logo for the main window and tray without a synthetic template`, async () => {
     const f = await fixture(false, { platform });
     try {
       assert.equal(f.windowOptions.length, 1); assert.equal(f.trayImages.length, 1);
-      assert.equal(f.windowOptions[0]?.icon, platform === "linux" ? "/unused-test-bundle/app-icon.png" : undefined);
+      assert.equal(f.windowOptions[0]?.icon, "/unused-test-bundle/app-icon.png");
       assert.equal(f.images.length, 1);
-      assert.equal(f.images[0]?.source, platform === "linux" ? "/unused-test-bundle/app-icon.png" : "bitmap");
-      assert.equal(f.images[0]?.template, platform === "darwin");
-      if (platform === "linux") assert.deepEqual(structuredClone(f.images[0]?.size), { width: 20, height: 20 });
+      assert.equal(f.images[0]?.source, "/unused-test-bundle/app-icon.png");
+      assert.equal(f.images[0]?.template, false);
+      assert.deepEqual(structuredClone(f.images[0]?.size), { width: 20, height: 20 });
       assert.ok(contract.isRecord(f.trayImages[0]));
       assert.equal(f.trayImages[0].source, f.images[0]?.source);
       assert.deepEqual(f.startupCalls, platform === "linux"

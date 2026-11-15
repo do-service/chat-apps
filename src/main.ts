@@ -133,22 +133,7 @@ function configuration(selectedURL?: string): RuntimeConfiguration {
 }
 
 function trayIcon(): Electron.NativeImage {
-  if (process.platform === "linux") return nativeImage.createFromPath(join(__dirname, "app-icon.png")).resize({ width: 20, height: 20 });
-  const size = 20;
-  const pixels = Buffer.alloc(size * size * 4);
-  for (let y = 2; y < 18; y += 1) {
-    for (let x = 2; x < 18; x += 1) {
-      if (y > 14 && x > 7) continue;
-      const offset = (y * size + x) * 4;
-      pixels[offset] = process.platform === "darwin" ? 0 : 186;
-      pixels[offset + 1] = process.platform === "darwin" ? 0 : 112;
-      pixels[offset + 2] = process.platform === "darwin" ? 0 : 32;
-      pixels[offset + 3] = 255;
-    }
-  }
-  const icon = nativeImage.createFromBitmap(pixels, { width: size, height: size, scaleFactor: 1 });
-  if (process.platform === "darwin") icon.setTemplateImage(true);
-  return icon;
+  return nativeImage.createFromPath(join(__dirname, "app-icon.png")).resize({ width: 20, height: 20 });
 }
 
 function emit(config: RuntimeConfiguration, event: DesktopEvent): void {
@@ -694,7 +679,7 @@ async function start(): Promise<void> {
     setStartupStage("creating-window");
     const window = new BrowserWindow({
       width: 1100, height: 780, minWidth: 640, minHeight: 480, show: false, title: "Chat Desktop Spike",
-      ...(os === "linux" ? { icon: join(__dirname, "app-icon.png") } : {}),
+      icon: join(__dirname, "app-icon.png"),
       webPreferences: {
         session: ses, preload: join(__dirname, "preload.cjs"),
         additionalArguments: [`${TRUSTED_ORIGIN_ARGUMENT}${config.trustedOrigin}`],

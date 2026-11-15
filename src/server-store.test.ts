@@ -57,10 +57,12 @@ test("I/O failures are surfaced, missing parent is not created and failed public
     const target = join(temp.path, "directory");
     mkdirSync(target);
     writeFileSync(join(target, "selection.json"), "file");
-    assert.throws(() => readServerSelection(join(target, "selection.json", "child")), (error: unknown) => {
-      // ENOENT is the only absent-file condition.
-      return error instanceof Error;
-    });
+    // A child of a regular file yields ENOTDIR on POSIX but ENOENT on Windows.
+    // Reading an existing directory must fail on both, not recover as a missing selection.
+    assert.throws(() => readServerSelection(target), (error: unknown) => error instanceof Error);
+    assert.throws(() => writeServerSelection(target, "https://example.com/"));
+    assert.deepEqual(readdirSync(temp.path), ["directory"]);
+    assert.equal(readFileSync(join(target, "selection.json"), "utf8"), "file");
   } finally { temp.cleanup(); }
 });
 

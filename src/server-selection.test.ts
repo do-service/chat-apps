@@ -136,6 +136,7 @@ test("startup is standalone, non-modal and visible in the taskbar", async () => 
   assert.equal(f.child().options.parent, undefined);
   assert.equal(f.child().options.modal, false);
   assert.equal(f.child().options.skipTaskbar, false);
+  assert.equal(f.child().options.icon, path.join("/test-dist", "app-icon.png"));
   f.ready(); f.answer(f.token(), null); assert.equal(await result, null); assertClean(f);
 });
 
@@ -152,6 +153,7 @@ test("invalid URL reports fixed local error and allows retry without closing", a
 test("frameless opaque modal uses hardened preferences, private session, no menu, and waits for ready-to-show", async () => {
   const f = fixture(); const result = f.start(); const child = f.child();
   assert.equal(child.options.parent, f.parent);
+  assert.equal(child.options.icon, path.join("/test-dist", "app-icon.png"));
   for (const [key, value] of Object.entries({ modal: true, frame: false, show: false, transparent: false, resizable: false })) {
     assert.equal(Reflect.get(child.options, key), value, key);
   }

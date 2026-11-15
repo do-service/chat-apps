@@ -78,7 +78,7 @@ export function confirmExternalLink(options: { parent: BrowserWindow; url: strin
         backgroundColor: nativeTheme.shouldUseDarkColors ? "#23262f" : "#ffffff",
         width: 500, height: 460, useContentSize: true, resizable: false, minimizable: false, maximizable: false,
         fullscreenable: false, skipTaskbar: true, autoHideMenuBar: true, thickFrame: false,
-        title: "Открыть в браузере?",
+        title: "Открыть в браузере?", icon: join(__dirname, "app-icon.png"),
         webPreferences: {
           session: isolatedSession, preload: join(__dirname, "external-link-preload.cjs"),
           additionalArguments: [`--chat-external-link-token=${token}`, `--chat-external-link-document=${documentId}`],
