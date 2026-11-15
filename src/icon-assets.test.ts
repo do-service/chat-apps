@@ -47,7 +47,7 @@ test("canonical PNG is 512px and Windows ICO includes multiple PNG resolutions",
 });
 
 test("all platform packages and runtime copy use the reviewed icon assets", () => {
-  const config = readFileSync("electron-builder.yml", "utf8");
+  const config = readFileSync("electron-builder.yml", "utf8").replace(/\r\n/g, "\n");
   for (const [platform, extension] of [["mac", "icns"], ["win", "ico"], ["linux", "png"]]) {
     const section = config.match(new RegExp(`^${platform}:\\n((?:[ \\t].*(?:\\n|$))*)`, "m"))?.[1];
     assert.ok(section, platform);
