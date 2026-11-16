@@ -9,26 +9,33 @@
 - В [app-config.json](<app-config.json>) задан default origin `https://chat.krista.ru`. Локальный host picker позволяет выбрать сервер; сохранённый выбор имеет приоритет над default. Оболочка использует текущую развёрнутую версию выбранного сайта.
 - Desktop bridge поддерживает выборочное снятие уведомлений и явное macOS-согласие на native notifications. Для полного сценария нужны **обе поставки**: новая оболочка с native addon и совместимый развёрнутый frontend-адаптер. Этот репозиторий не содержит и не развёртывает сайт; состав desktop-сборки не доказывает версию remote frontend или end-to-end результат.
 - Локальный `--spike` — диагностика уведомлений и lifecycle с искусственными событиями, не offline-версия Chat и не проверка реальных сообщений.
-- Версия подготовки preview — `0.1.1-preview.3`. Сохраняются существующие имя `Chat Desktop Spike`, npm package `chat-desktop-spike`, app ID `ru.exz-vps.chat.desktop.spike` и профиль/session partition. Обновление не сбрасывает сохранённые предпочтения пользователя.
+- Версия подготовки preview — `0.1.1-preview.4`. Сохраняются существующие имя `Chat Desktop Spike`, npm package `chat-desktop-spike`, app ID `ru.exz-vps.chat.desktop.spike` и профиль/session partition. Обновление не сбрасывает сохранённые предпочтения пользователя.
 - Публичная доступность репозитория не выдаёт open-source лицензию. В [package.json](<package.json>) остаются `license: UNLICENSED` и `private: true`; последнее запрещает случайную npm-публикацию, а не определяет видимость репозитория.
 
-## Preview и загрузки — подготовка preview.3
+## Preview и загрузки — подготовка preview.4
 
-Готовится публичный **`v0.1.1-preview.3`** для Windows x64, macOS arm64/x64 и Linux x64, не production-релиз. В состав входят native updater и выбор сервера с default `https://chat.krista.ru`; Android исключён из этой публикации. На 2026-11-15 новые CI/installers и публикация preview.3 **ещё не подтверждены**. Прямые ссылки ниже — ожидаемые адреса после отдельной публикации, до неё могут возвращать 404; `/releases/latest` не является адресом preview.
+Готовится публичный **`v0.1.1-preview.4`** для Windows x64, macOS arm64/x64 и Linux x64, не production-релиз. Добавлены счётчик непрочитанных Windows, явная интеграция AppImage с панелью Linux/KDE и native-перезагрузка клиента; сохраняются цветные иконки всех платформ, updater и выбор сервера с default `https://chat.krista.ru`. Android исключён. На 2026-11-16 новые CI/installers и публикация preview.4 **ещё не подтверждены**. Прямые ссылки ниже — ожидаемые адреса после отдельной публикации, до неё могут возвращать 404; `/releases/latest` не является адресом preview.
 
-Предыдущий [публичный prerelease `v0.1.1-preview.2`](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.2) опубликован **2026-11-12**: четыре installers и `SHA256SUMS.txt`, без нового updater. Также сохранён [preview.1](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.1). Это история предыдущих версий, не CI/runtime/OS evidence preview.3. Ранее опубликованные приложения требуют ручного bootstrap на новую оболочку.
+Предыдущий [публичный prerelease `v0.1.1-preview.3`](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.3) опубликован **2026-11-15**: четыре installers, updater metadata/blockmap и `SHA256SUMS.txt`. Также сохранены [preview.2](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.2) и [preview.1](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.1). Это история предыдущих версий, не CI/runtime/OS evidence preview.4. Клиенты без рабочего встроенного updater требуют ручного bootstrap на новую оболочку.
 
-| Платформа | Ожидаемый installer preview.3 |
+| Платформа | Ожидаемый installer preview.4 |
 | --- | --- |
-| Windows x64 | [NSIS .exe](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.3/chat-desktop-spike-0.1.1-preview.3-win-x64.exe) |
-| macOS Apple Silicon | [DMG arm64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.3/chat-desktop-spike-0.1.1-preview.3-mac-arm64.dmg) |
-| macOS Intel | [DMG x64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.3/chat-desktop-spike-0.1.1-preview.3-mac-x64.dmg) |
-| Linux x64 | [AppImage x86_64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.3/chat-desktop-spike-0.1.1-preview.3-linux-x86_64.AppImage) |
-| Контрольные суммы | [SHA256SUMS.txt — четыре installers и updater metadata/blockmap](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.3/SHA256SUMS.txt) |
+| Windows x64 | [NSIS .exe](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/chat-desktop-spike-0.1.1-preview.4-win-x64.exe) |
+| macOS Apple Silicon | [DMG arm64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/chat-desktop-spike-0.1.1-preview.4-mac-arm64.dmg) |
+| macOS Intel | [DMG x64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/chat-desktop-spike-0.1.1-preview.4-mac-x64.dmg) |
+| Linux x64 | [AppImage x86_64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/chat-desktop-spike-0.1.1-preview.4-linux-x86_64.AppImage) |
+| Контрольные суммы | [SHA256SUMS.txt — четыре installers и updater metadata/blockmap](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/SHA256SUMS.txt) |
 
-Сверьте SHA-256 до установки. Windows preview остаётся unsigned, без доверенной подписи; macOS использует ad-hoc signing, **без Developer ID и notarization**. Возможны SmartScreen/Gatekeeper warnings или отказ запуска. Не отключайте защиты ОС ради запуска; зафиксируйте отказ как ограничение. В preview.3 Linux updater допускается только для установленного writable AppImage; его N→N+1 приёмка ещё не проведена. Unsigned Windows остаётся external/manual fallback без trusted publisher; signature verification не отключается. macOS обновляется только внешним DMG нужной архитектуры, без ZIP/updater metadata.
+Сверьте SHA-256 до установки. Windows preview остаётся unsigned, без доверенной подписи; macOS использует ad-hoc signing, **без Developer ID и notarization**. Возможны SmartScreen/Gatekeeper warnings или отказ запуска. Не отключайте защиты ОС ради запуска; зафиксируйте отказ как ограничение. В preview.4 Linux updater допускается только для установленного writable AppImage; его N→N+1 приёмка ещё не проведена. Unsigned Windows остаётся external/manual fallback без trusted publisher; signature verification не отключается. macOS обновляется только внешним DMG нужной архитектуры, без ZIP/updater metadata.
 
-### Что сохраняется из preview.2
+### Новое в preview.4
+
+- Windows: native taskbar overlay `1…99` / `99+`, полный счётчик в accessibility description. Ноль, выход и смена аккаунта очищают значок; восстановление окна применяет последнее значение. Реальный показ зависит от настроек Windows и ещё требует installed-проверки.
+- Linux/KDE: скачанный AppImage работает без установки. Для привязки LauncherEntry предлагается **явно** добавить пользовательский ярлык в меню приложений; «Не сейчас» ничего не регистрирует и запоминается локально. Повтор — через меню/tray «Добавить в меню приложений…». Чужие ярлыки, профиль и настройки панели не меняются. После перемещения AppImage обновление собственного ярлыка требует нового согласия; старые pins могут потребовать ручной перепривязки. Счётчик по-прежнему best effort, не обход DND/badge settings KDE.
+- Меню/tray «Перезагрузить клиент…» и `Ctrl/Cmd+Shift+R`: подтверждение с фокусом на отмене, затем reload текущего доверенного документа без cache. Возможен обрыв звонка/передачи файлов; устаревшее подтверждение после смены документа/аккаунта или Quit не применяется. Совместимый сайт может использовать optional bridge `reloadClient`; сайт не входит в этот релиз.
+- Сохранены цветные canonical иконки окна, startup/dialog и трея всех ОС из preview.3. Новая app identity, сброс cookies/настроек и автоматическая установка Linux-программы не добавляются.
+
+### Что сохраняется из предыдущих preview
 
 - Новый выразительный (expressive) локальный диалог подтверждения внешнего HTTPS popup: отдельное модальное окно, светлая/тёмная тема ОС, видимые host и полный URL, безопасный фокус на «Отмена» и прокрутка длинного адреса с клавиатуры. Отмена или потеря актуального окна/документа/account не открывает браузер. Подробности — ниже; установленная OS-приёмка ещё не выполнена.
 - Linux получает canonical PNG для главного окна и согласованное имя desktop entry `ru.exz-vps.chat.desktop.spike.desktop`. Badge через LauncherEntry — **best effort**, только при поддержке окружения и совпадающем установленном desktop entry; старые закреплённые launcher-ярлыки могут не обновиться.
@@ -108,7 +115,7 @@ Remote renderer работает с sandbox/context isolation, без Node integ
 
 - Native API support и принятие запроса не гарантируют banner, звук, центр уведомлений или callback ОС. Влияют разрешения, Focus/DND, desktop environment и signing/identity.
 - Журнал хранит идентификаторы account/event/chat/call, TTL и OS metadata, но не title/body. Он не является архивом сообщений и всё равно содержит чувствительные идентификаторы; Electron session отдельно хранит cookies сайта.
-- Уведомления привязаны к account, дедуплицируются по event ID, заменяются в группе chat/call и ограничены TTL/лимитами. Badge поддерживается на macOS и best-effort через Linux LauncherEntry; Windows badge не поддерживается. Успешный ответ API не доказывает видимый счётчик.
+- Уведомления привязаны к account, дедуплицируются по event ID, заменяются в группе chat/call и ограничены TTL/лимитами. Badge использует macOS Dock API, Windows taskbar overlay и best-effort Linux LauncherEntry. Успешный ответ API не доказывает видимый счётчик.
 - На macOS `Cmd+M` использует стандартную menu role `minimize`, `Cmd+H` — `hide`; это разные действия, не глобальные hotkeys. `Cmd+W`/крестик скрывают окно, `Cmd+Q` завершает приложение. На Windows/Linux крестик скрывает окно, а при отсутствии tray — сворачивает; macOS roles туда не добавляются. Tray/menu/Dock позволяют вернуть окно. Получение событий зависит от живого renderer и подключения сайта.
 - **«Выход» / Quit завершает процесс и получение новых событий.** Background push/service после Quit не реализован. Activation уже доставленного уведомления после restart — отдельный best-effort сценарий, не гарантия cold-start на каждой ОС.
 - macOS history restoration — best effort. На Windows отсутствует публичный remove-by-ID для старого toast, объект которого потерян после restart; видимый stale toast может остаться, но не должен вести в чужой/истёкший route.
@@ -117,7 +124,7 @@ Remote renderer работает с sandbox/context isolation, без Node integ
 
 Для главного окна build копирует canonical [PNG-иконку](<build/icons/icon.png>); packaging использует тот же ресурс. Linux runtime и packaging согласованы на desktop entry `ru.exz-vps.chat.desktop.spike.desktop` через `desktopName` и `linux.syncDesktopName`. Это не новая app identity и не новый пользовательский профиль.
 
-Видимый LauncherEntry badge требует поддерживающего dock/taskbar и **установленного `.desktop` с этим точным именем**. Сам по себе запуск AppImage/source/unpacked не гарантирует интеграцию launcher. Старые pins, desktop-entry cache и несовпадающее имя ярлыка могут сохранять прежнюю иконку или не показывать счётчик; может потребоваться заново закрепить корректный установленный launcher. Ни успешный `setBadgeCount`, ни наличие PNG не являются installed Linux acceptance. macOS badge сохраняется, Windows overlay/badge не реализован.
+Видимый LauncherEntry badge требует поддерживающей панели и **зарегистрированного desktop entry с этим точным именем**: [обработчик KDE](https://github.com/KDE/plasma-desktop/blob/master/applets/taskmanager/smartlauncherbackend.cpp) ищет desktop service, встроенного в AppImage файла для этого недостаточно. Preview.4 предлагает создать пользовательский ярлык и стабильную копию иконки только после native-согласия; права администратора не нужны, AppImage остаётся на своём месте. Отказ не создаёт ярлык. Чужие entries, symlink/hardlink targets не перезаписываются; staged atomic publication не оставляет частично записанный launcher при проверенных ошибках write/fsync. Это не гарантия power-loss/двухфайловой транзакции. Старые pins, cache и несовпадающее имя могут мешать показу; может потребоваться заново закрепить правильный launcher. Успешный `setBadgeCount` не доказывает видимый badge. Windows использует отдельный `setOverlayIcon`, macOS Dock API сохраняется.
 
 ### Явное macOS-согласие на уведомления
 
@@ -150,7 +157,7 @@ npm run package:linux     # Linux: AppImage x64
 npm run package:dir       # распакованное приложение текущей ОС
 ```
 
-Результат появляется в `release`. Базовое имя: `chat-desktop-spike-0.1.1-preview.3-<os>-<arch>.<ext>` (Linux x64 расширяется packager-ом как `x86_64`). Для публичного распространения эти команды сами по себе недостаточны: нужны отдельные решения о signing, notarization и установленная OS-приёмка.
+Результат появляется в `release`. Базовое имя: `chat-desktop-spike-0.1.1-preview.4-<os>-<arch>.<ext>` (Linux x64 расширяется packager-ом как `x86_64`). Для публичного распространения эти команды сами по себе недостаточны: нужны отдельные решения о signing, notarization и установленная OS-приёмка.
 
 [Desktop CI](<.github/workflows/desktop.yml>) предназначен для тестовых native-сборок на стандартных hosted runners:
 
@@ -161,7 +168,7 @@ npm run package:dir       # распакованное приложение те
 | macOS Intel | `macos-15` (тот же packaging job) | DMG `x64` |
 | Linux x64 | `ubuntu-24.04` | AppImage |
 
-CI выполняет locked install, последовательную инициализацию Electron (до трёх попыток штатного installer с timeout; после неудачи job завершается ошибкой), typecheck, tests, artifact-helper tests, build и packaging. Native Windows/Linux x64 packaging использует уже установленный Electron dist без повторной сетевой загрузки; macOS dual-arch собирается отдельно. Reuse dist может сохранить штатные дополнительные ресурсы Electron, например `default_app.asar`; основной код приложения остаётся в `app.asar`. [Artifact helper](<scripts/artifacts.mjs>) проверяет точный allowlist и создаёт `SHA256SUMS.txt`; прежняя команда `node scripts/artifacts.mjs windows` (либо `macos`/`linux`) сохраняет installer-only режим. Подготовленный workflow использует явный `--preview`: добавляются только проверенные `preview.yml` + точный NSIS blockmap или `preview-linux.yml` с embedded AppImage blockmap, никогда произвольный glob. Проверяются version/asset/size/SHA-512 и blockmap chunks; macOS остаётся DMG-only без ZIP/YAML. Helper отказывает при существующем checksum manifest, а не перезаписывает его. Точные outputs и ограничения — в [desktop acceptance](<ACCEPTANCE.md#подготовка-preview3--2026-11-15>). Отдельные [desktop policy tests](<scripts/desktop-release-workflow.test.mjs>) не импортируют исключённые Android release inputs.
+CI выполняет locked install, последовательную инициализацию Electron (до трёх попыток штатного installer с timeout; после неудачи job завершается ошибкой), typecheck, tests, artifact-helper tests, build и packaging. Native Windows/Linux x64 packaging использует уже установленный Electron dist без повторной сетевой загрузки; macOS dual-arch собирается отдельно. Reuse dist может сохранить штатные дополнительные ресурсы Electron, например `default_app.asar`; основной код приложения остаётся в `app.asar`. [Artifact helper](<scripts/artifacts.mjs>) проверяет точный allowlist и создаёт `SHA256SUMS.txt`; прежняя команда `node scripts/artifacts.mjs windows` (либо `macos`/`linux`) сохраняет installer-only режим. Подготовленный workflow использует явный `--preview`: добавляются только проверенные `preview.yml` + точный NSIS blockmap или `preview-linux.yml` с embedded AppImage blockmap, никогда произвольный glob. Проверяются version/asset/size/SHA-512 и blockmap chunks; macOS остаётся DMG-only без ZIP/YAML. Helper отказывает при существующем checksum manifest, а не перезаписывает его. Точные outputs и ограничения — в [desktop acceptance](<ACCEPTANCE.md#подготовка-preview4--2026-11-16>). Отдельные [desktop policy tests](<scripts/desktop-release-workflow.test.mjs>) не импортируют исключённые Android release inputs.
 
 Проверка обеих macOS архитектур в packaging не заменяет запуск на обоих типах Mac. macOS CI использует **ad-hoc signing только для теста**, без Developer ID и notarization. CLI overrides `mac.identity=-`, `mac.hardenedRuntime=false`, `mac.notarize=false` относятся только к тестовому job; базовая конфигурация с `hardenedRuntime: true` не меняется. Это не обход Gatekeeper и не подтверждение допуска/показа уведомлений ОС.
 
@@ -171,7 +178,7 @@ Workflow создаёт Actions artifacts `desktop-test-<platform>-<run_id>-<run
 
 Отдельный [manual Android workflow](<.github/workflows/android.yml>) собирает тестовый APK на Linux runner из проверенного frontend/mobile snapshot GitLab, без публикации backend, истории или raw source archive. Инструкции, доступ только из `main`, Secrets, точный artifact allowlist и ограничения debug-подписи — в [Android CI](<ANDROID_CI.md>). Этот job не меняет desktop-сборку и не публикует Release/Google Play. Успех локальных helper-тестов сам по себе не означает, что APK уже собран.
 
-Android signing/release preparation не входит в desktop preview.3 и не является его CI-зависимостью.
+Android signing/release preparation не входит в desktop preview.4 и не является его CI-зависимостью.
 
 ## Приёмка и известные риски
 
@@ -179,4 +186,4 @@ Android signing/release preparation не входит в desktop preview.3 и н
 
 Известная оговорка: отдельные audit от 2026-11-08 и 2026-11-09 сообщили moderate advisory [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) в build-time цепочке `minimatch` через packaging tools; high/critical не зафиксированы. Manifest и lock подтверждают devDependency-цепочку; это не утверждение об exploit в renderer. Подробности — в [ACCEPTANCE.md](<ACCEPTANCE.md>). Исправление/override зависимостей здесь не выполнялись. Audit нужно повторять отдельно; закреплённые версии и успешные тесты не означают «уязвимостей нет».
 
-Документация preview.3 подготовлена 2026-11-15. Исторические результаты `0.1.0` и опубликованных preview.1/preview.2 не перенесены в новую версию; новые CI/installers, публикация и installed-приёмка preview.3 пока не подтверждены. Lead заполняет фактические проверки отдельно в [ACCEPTANCE.md](<ACCEPTANCE.md>). Это не протокол production deployment.
+Документация preview.4 подготовлена 2026-11-16. Исторические результаты `0.1.0` и опубликованных preview.1/preview.2/preview.3 не перенесены в новую версию; новые CI/installers, публикация и installed-приёмка preview.4 пока не подтверждены. Lead заполняет фактические проверки отдельно в [ACCEPTANCE.md](<ACCEPTANCE.md>). Это не протокол production deployment.

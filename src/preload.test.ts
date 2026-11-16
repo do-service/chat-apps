@@ -35,6 +35,15 @@ function fixture(mainFrame = true, origin = "https://chat.example", response: un
   return { calls, bridge: exposed.chatDesktop, updates: exposed.chatUpdates };
 }
 
+test("preload exposes optional reload with exact zero-argument IPC and no second confirmation", async () => {
+  const f = fixture(); assert.ok(contract.isRecord(f.bridge));
+  const reload = f.bridge.reloadClient; assert.ok(typeof reload === "function");
+  assert.equal(await reload(), undefined);
+  assert.deepEqual(f.calls, [{ channel: "chat-desktop:v1:reload-client", value: undefined }]);
+  await assert.rejects(async () => reload("https://attacker.example"));
+  assert.equal(f.calls.length, 1);
+});
+
 test("preload exposes additive dismiss operation with strict validation before IPC", async () => {
   const f = fixture();
   assert.ok(contract.isRecord(f.bridge));

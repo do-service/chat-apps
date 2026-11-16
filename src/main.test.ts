@@ -12,9 +12,11 @@ import * as notificationPermissions from "./notification-permission";
 import * as security from "./security";
 import * as updates from "./updates";
 import * as updateIPC from "./update-ipc";
+import * as taskbarBadge from "./taskbar-badge";
 import type { UpdatePort, UpdateContext } from "./updates";
 import type { MenuItemConstructorOptions } from "electron";
 import type { DesktopEvent, WindowState } from "./contract";
+import type { LinuxDesktopIntegrationPort } from "./linux-desktop-integration";
 import type { NativeCallbacks, NotificationMetadata, NotificationNativePort } from "./notifications";
 
 const origin = "https://chat.example";
@@ -30,12 +32,20 @@ type PermissionDetails = Record<string, unknown>;
 type RequestHandler = (contents: unknown, permission: string, callback: (allowed: boolean) => void, details: unknown) => void;
 type CheckHandler = (contents: unknown, permission: string, requestingOrigin: string, details: unknown) => boolean;
 
-async function fixture(cold = false, options: { savedServer?: string | null; serverChoice?: string | null; serverWriteFails?: boolean; serverReadFails?: boolean; relaunchFails?: boolean; environmentURL?: string; updates?: boolean; spike?: boolean; platform?: string; status?: MediaStatus; cameraStatus?: MediaStatus; notificationPermission?: string; realNotificationPermission?: boolean; badgeResult?: boolean } = {}) {
+async function fixture(cold = false, options: { savedServer?: string | null; serverChoice?: string | null; serverWriteFails?: boolean; serverReadFails?: boolean; relaunchFails?: boolean; environmentURL?: string; updates?: boolean; spike?: boolean; platform?: string; status?: MediaStatus; cameraStatus?: MediaStatus; notificationPermission?: string; realNotificationPermission?: boolean; badgeResult?: boolean; appImage?: string; captureBadgeTimers?: boolean } = {}) {
+  const integrationPorts: LinuxDesktopIntegrationPort[] = [];
+  const integrationCalls: boolean[] = [];
+  const badgeRefreshes: (() => void)[] = [];
+  const integrationPrompts: Electron.MessageBoxOptions[] = [];
+  let integrationAnswer: () => Promise<number> = async () => 1;
   const serverCalls: string[] = [];
   const serverPrompts: { initialURL: string; switching: boolean; signal: AbortSignal }[] = [];
   let serverChoice: () => Promise<string | null> = async () => options.serverChoice ?? null;
   const events: DesktopEvent[] = [];
   const badgeCalls: number[] = [];
+  const overlayCalls: { image: unknown; description: string; window: number }[] = [];
+  const bitmapCalls: { pixels: Buffer; width: number; height: number }[] = [];
+  let overlayFails = false;
   const startupCalls: string[] = [];
   const windowOptions: Electron.BrowserWindowConstructorOptions[] = [];
   const images: { source: string; template: boolean; size?: { width: number; height: number } }[] = [];
@@ -92,6 +102,11 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
   let deviceHandler: (() => boolean) | undefined;
   let displayHandler: ((request: unknown, callback: (value: unknown) => void) => void) | undefined;
   const messages: { message: string; detail?: string }[] = [];
+  const reloadPrompts: Electron.MessageBoxOptions[] = [];
+  const reloadCalls: string[] = [];
+  const loads: string[] = [];
+  let loading = false;
+  let reloadAnswer: () => Promise<number> = async () => 1;
   const applicationMenus: MenuItemConstructorOptions[][] = [];
   const trayMenus: MenuItemConstructorOptions[][] = [];
   const frame = { origin, url: `${origin}/`, get parent() { return frameParent; }, isDestroyed: () => frameDestroyed,
@@ -99,12 +114,19 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
   let windowOpen: ((details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse) | undefined;
   const contents = Object.assign(new EventEmitter(), {
     mainFrame: frame, isDestroyed: () => contentsDestroyed,
+    isLoadingMainFrame: () => loading,
+    reloadIgnoringCache: () => { reloadCalls.push(frame.url); },
     setWindowOpenHandler(handler: typeof windowOpen) { windowOpen = handler; }, getURL: () => contentsURL ?? frame.url,
   });
   let rootWindow: Window | undefined;
   class Window extends EventEmitter {
     constructor(options: Electron.BrowserWindowConstructorOptions) {
       super(); startupCalls.push("window"); windowOptions.push(options); rootWindow = this;
+    }
+    readonly windowNumber = windowOptions.length + 1;
+    setOverlayIcon(image: unknown, description: string) {
+      if (overlayFails) throw new Error("private OS details");
+      overlayCalls.push({ image, description, window: this.windowNumber });
     }
     webContents = contents;
     isDestroyed() { return destroyed; }
@@ -116,7 +138,7 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
     focus() { state = { ...state, focused: true }; this.emit("focus"); }
     hide() { state = { ...state, visible: false }; }
     minimize() { state = { ...state, minimized: true }; }
-    async loadURL() {}
+    async loadURL(url: string) { loads.push(url); }
   }
   const ses = Object.assign(new EventEmitter(), {
     setPermissionRequestHandler(handler: RequestHandler) { requestHandler = handler; },
@@ -168,11 +190,31 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
         getMediaAccessStatus: (kind: MediaKind) => { osCalls.push(`status:${kind}`); if (statusFailures.has(kind)) throw new Error("secret URL"); return mediaStatus[kind]; },
         askForMediaAccess: (kind: MediaKind) => { osCalls.push(`ask:${kind}`); return consent[kind](); },
       },
-      nativeImage: { createFromBitmap: () => image("bitmap"), createFromPath: (path: string) => image(path) },
+      nativeImage: {
+        createFromBitmap: (pixels: Buffer, options: { width: number; height: number }) => {
+          bitmapCalls.push({ pixels: Buffer.from(pixels), width: options.width, height: options.height });
+          return image("bitmap");
+        },
+        createFromPath: (path: string) => image(path),
+      },
       powerMonitor: power, protocol: { registerSchemesAsPrivileged() {} }, session: { fromPartition: () => ses },
       shell: { openExternal: async (url: string) => { notificationCalls.push(url); } }, dialog: {
         showErrorBox: (_title: string, message: string) => { messages.push({ message }); },
-        showMessageBox: async (value: { message: string }) => { messages.push(value); return { response: 0 }; },
+        showMessageBox: async (parent: unknown, options?: Electron.MessageBoxOptions) => {
+          if (options?.message === "Добавить Chat в меню приложений?") {
+            integrationPrompts.push(options);
+            return { response: await integrationAnswer() };
+          }
+          if (options?.message === "Перезагрузить клиент?" || (contract.isRecord(parent) && parent.message === "Перезагрузить клиент?")) {
+            const value = options ?? parent;
+            assert.ok(contract.isRecord(value) && typeof value.message === "string");
+            reloadPrompts.push({ ...value, message: value.message });
+            return { response: await reloadAnswer() };
+          }
+          assert.ok(contract.isRecord(parent) && typeof parent.message === "string");
+          messages.push({ message: parent.message, ...(typeof parent.detail === "string" ? { detail: parent.detail } : {}) });
+          return { response: 0 };
+        },
       }, Tray,
     },
     "node:fs": { existsSync: () => false }, "node:path": { join: (...parts: string[]) => parts.join("/") },
@@ -190,8 +232,12 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
     "./server-selection": { selectServer: (request: (typeof serverPrompts)[number]) => {
       serverPrompts.push(request); return serverChoice();
     } },
+    "./linux-desktop-integration": { createLinuxDesktopIntegration: (port: LinuxDesktopIntegrationPort) => {
+      integrationPorts.push(port);
+      return async (manual = false) => { integrationCalls.push(manual); };
+    } },
     "./contract": contract, "./security": security, "./lifecycle": lifecycle, "./media-permissions": mediaPermissions, "./notifications": notifications,
-    "./updates": updates, "./update-ipc": updateIPC,
+    "./updates": updates, "./update-ipc": updateIPC, "./taskbar-badge": taskbarBadge,
     "./electron-updates": { createElectronUpdatePort: () => ({ mode: options.updates ? "install" : "unconfigured", port: updatePort }) },
     "./config": { resolveConfiguration: (_args: string[], url: string | undefined) => options.spike === false
       ? resolveConfiguration([], url, { appUrl: origin })
@@ -217,8 +263,14 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
   };
   runInNewContext(source, {
     require: (name: string) => { if (!(name in modules)) throw new Error(`Unexpected module ${name}`); return modules[name]; },
-    __dirname: "/unused-test-bundle", process: { platform: options.platform ?? "darwin", argv: [], env: options.environmentURL === undefined ? {} : { DESKTOP_APP_URL: options.environmentURL } },
-    console: { info() {}, error() {} }, Buffer, AbortController, setImmediate, setTimeout, clearTimeout, setInterval, clearInterval,
+    __dirname: "/unused-test-bundle", process: { platform: options.platform ?? "darwin", argv: [], env: { ...(options.environmentURL === undefined ? {} : { DESKTOP_APP_URL: options.environmentURL }), ...(options.appImage === undefined ? {} : { APPIMAGE: options.appImage }) } },
+    console: { info() {}, error() {} }, Buffer, AbortController, setImmediate,
+    setTimeout: (callback: () => void, delay?: number) => {
+      if (options.captureBadgeTimers && (delay === 1000 || delay === 3000)) {
+        badgeRefreshes.push(callback); return { unref() {} };
+      }
+      return setTimeout(callback, delay);
+    }, clearTimeout, setInterval, clearInterval,
   });
   await new Promise<void>((done) => setImmediate(done));
   if (!options.serverReadFails && !(options.savedServer === null && options.serverWriteFails)
@@ -230,10 +282,16 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
   };
   return { events, handlers, sender, invoke, power, stop: () => app.emit("before-quit"),
     setState: (value: WindowState) => { state = value; },
+    getState: () => state,
     click: () => { assert.ok(callbacks); callbacks.click(); },
     contents, frame, osCalls, notificationCalls, applicationMenus, trayMenus, createdNotifications,
-    badgeCalls, startupCalls, windowOptions, images, trayImages, messages, externalPrompts,
-    updateCalls, serverCalls, serverPrompts,
+    badgeCalls, overlayCalls, bitmapCalls, startupCalls, windowOptions, images, trayImages, messages, externalPrompts,
+    setOverlayFails: (value: boolean) => { overlayFails = value; },
+    updateCalls, serverCalls, serverPrompts, reloadPrompts, reloadCalls, loads,
+    integrationPorts, integrationCalls, integrationPrompts, badgeRefreshes,
+    setIntegrationAnswer: (value: typeof integrationAnswer) => { integrationAnswer = value; },
+    setReloadAnswer: (answer: typeof reloadAnswer) => { reloadAnswer = answer; },
+    setLoading: (value: boolean) => { loading = value; },
     setServerChoice: (choose: typeof serverChoice) => { serverChoice = choose; },
     setUpdateConfirmation: (value: typeof confirmUpdate) => { confirmUpdate = value; },
     setUpdateInstall: (value: typeof updateInstall) => { updateInstall = value; },
@@ -280,6 +338,133 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
       Reflect.apply(menu.click, undefined, []); await new Promise<void>((done) => setImmediate(done)); return messages.at(-1)?.message;
     },
   };
+}
+
+const reloadChannel = "chat-desktop:v1:reload-client";
+
+for (const platform of ["darwin", "win32", "linux"]) {
+  test(`${platform} reload menu/tray/accelerator and IPC share one cancel-default confirmation`, async () => {
+    const f = await fixture(false, { platform });
+    try {
+      const items = f.applicationMenus[0]?.flatMap((item) => Array.isArray(item.submenu) ? item.submenu : []) ?? [];
+      const action = items.find((item) => item.label === "Перезагрузить клиент…"); assert.ok(action?.click);
+      assert.equal(action.accelerator, "CommandOrControl+Shift+R");
+      assert.equal(f.trayMenus[0]?.find((item) => item.label === action.label)?.click, action.click);
+      f.frame.url = `${origin}/chats/42?thread=7#message`;
+      let answer: ((value: number) => void) | undefined;
+      f.setReloadAnswer(() => new Promise((resolve) => { answer = resolve; }));
+      Reflect.apply(action.click, undefined, []);
+      const pending = f.invoke(reloadChannel);
+      assert.equal(f.reloadPrompts.length, 1); assert.ok(answer);
+      const prompt = f.reloadPrompts[0]; assert.ok(prompt);
+      assert.equal(prompt.message, "Перезагрузить клиент?");
+      assert.equal(prompt.detail, "Текущий звонок и передача файлов могут быть прерваны.");
+      assert.deepEqual(Array.from(prompt.buttons ?? []), ["Перезагрузить", "Отмена"]);
+      assert.equal(prompt.cancelId, 1); assert.equal(prompt.defaultId, 1);
+      answer(0); await pending; await settle();
+      assert.deepEqual(f.reloadCalls, [f.frame.url]);
+      assert.deepEqual(f.loads, [`${origin}/`]);
+      assert.equal(f.serverCalls.includes("relaunch"), false);
+      f.setReloadAnswer(async () => 1); await f.invoke(reloadChannel);
+      assert.equal(f.reloadCalls.length, 1);
+      f.setReloadAnswer(async () => { throw new Error("private-error"); });
+      await assert.rejects(async () => f.invoke(reloadChannel));
+      assert.equal(f.reloadCalls.length, 1);
+    } finally { f.stop(); }
+  });
+}
+
+for (const change of ["navigate", "navigate-back", "same-document", "account", "crash", "commit", "quit", "destroy-window", "destroy-contents", "destroy-frame", "replace-frame", "frame-url", "contents-url", "origin", "loading", "closed"]) {
+  test(`reload confirmation cannot outlive ${change}`, async () => {
+    const f = await fixture();
+    try {
+      let answer: ((value: number) => void) | undefined;
+      f.setReloadAnswer(() => new Promise((resolve) => { answer = resolve; }));
+      const pending = f.invoke(reloadChannel); assert.ok(answer);
+      if (change === "navigate") f.navigate();
+      if (change === "navigate-back") { f.navigate(`${origin}/other`); f.navigate(`${origin}/`); }
+      if (change === "same-document") f.contents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+      if (change === "account") f.invoke(contract.IPC.setAccount, "bob");
+      if (change === "crash") f.contents.emit("render-process-gone");
+      if (change === "commit") f.contents.emit("did-navigate");
+      if (change === "quit") f.stop();
+      if (change === "destroy-window") f.destroyWindow();
+      if (change === "destroy-contents") f.destroyContents();
+      if (change === "destroy-frame") f.destroyFrame();
+      if (change === "replace-frame") f.contents.mainFrame = { ...f.frame };
+      if (change === "frame-url") f.frame.url = `${origin}/other`;
+      if (change === "contents-url") f.setContentsURL(`${origin}/other`);
+      if (change === "origin") f.frame.origin = "https://attacker.example";
+      if (change === "loading") f.setLoading(true);
+      if (change === "closed") f.windowEvent("closed");
+      answer(0); await pending; assert.deepEqual(f.reloadCalls, []);
+      assert.equal(f.loads.includes(`${origin}/`), true);
+      assert.equal(f.loads.filter((url) => url === `${origin}/`).length, 1);
+    } finally { f.stop(); }
+  });
+}
+
+test("reload IPC rejects arbitrary arguments and non-current/untrusted senders before prompting", async () => {
+  const f = await fixture();
+  try {
+    assert.throws(() => f.invoke(reloadChannel, origin));
+    const handler = f.handlers.get(reloadChannel); assert.ok(handler);
+    for (const sender of [{ sender: {}, senderFrame: f.frame }, { ...f.sender, senderFrame: null }]) assert.throws(() => handler(sender));
+    f.setFrameParent({}); assert.throws(() => f.invoke(reloadChannel)); f.setFrameParent(null);
+    f.frame.origin = "https://attacker.example"; assert.throws(() => f.invoke(reloadChannel));
+    assert.deepEqual(f.reloadPrompts, []);
+  } finally { f.stop(); }
+});
+
+for (const invalid of ["foreign", "loading", "mismatched-url"]) {
+  test(`native reload refuses initial ${invalid} document without prompting or recovery`, async () => {
+    const f = await fixture();
+    try {
+      if (invalid === "foreign") { f.frame.url = "https://attacker.example/"; f.frame.origin = "https://attacker.example"; }
+      if (invalid === "loading") f.setLoading(true);
+      if (invalid === "mismatched-url") f.setContentsURL(`${origin}/other`);
+      const action = f.trayMenus[0]?.find((item) => item.label === "Перезагрузить клиент…"); assert.ok(action?.click);
+      Reflect.apply(action.click, undefined, []); await settle();
+      assert.deepEqual(f.reloadPrompts, []); assert.deepEqual(f.reloadCalls, []);
+      assert.deepEqual(f.loads, [`${origin}/`]);
+    } finally { f.stop(); }
+  });
+}
+
+for (const state of [{ focused: false, visible: false, minimized: false }, { focused: false, visible: true, minimized: true }]) {
+  test(`tray reload makes hidden/minimized owner visible before prompting: ${JSON.stringify(state)}`, async () => {
+    const f = await fixture();
+    try {
+      f.setState(state);
+      f.setReloadAnswer(async () => {
+        assert.deepEqual(f.getState(), { focused: true, visible: true, minimized: false });
+        return 1;
+      });
+      const action = f.trayMenus[0]?.find((item) => item.label === "Перезагрузить клиент…"); assert.ok(action?.click);
+      Reflect.apply(action.click, undefined, []); await settle();
+      assert.deepEqual(f.getState(), { focused: true, visible: true, minimized: false });
+      assert.equal(f.reloadPrompts.length, 1); assert.deepEqual(f.reloadCalls, []);
+    } finally { f.stop(); }
+  });
+}
+
+for (const unavailable of ["error", "blank", "contents", "missing"]) {
+  test(`native reload recovers ${unavailable} only to fixed config URL after consent`, async () => {
+    const f = await fixture();
+    try {
+      if (unavailable === "error") f.frame.url = security.ERROR_URL;
+      if (unavailable === "blank") f.frame.url = "about:blank";
+      if (unavailable === "contents") f.destroyContents();
+      if (unavailable === "missing") f.windowEvent("closed");
+      f.setReloadAnswer(async () => 0);
+      const action = f.trayMenus[0]?.find((item) => item.label === "Перезагрузить клиент…"); assert.ok(action?.click);
+      Reflect.apply(action.click, undefined, []); await settle();
+      assert.equal(f.reloadPrompts.length, 1);
+      assert.deepEqual(f.reloadCalls, []);
+      assert.equal(f.loads.filter((url) => url === `${origin}/`).length, 2);
+      if (unavailable === "contents" || unavailable === "missing") assert.equal(f.windowOptions.length, 2);
+    } finally { f.stop(); }
+  });
 }
 
 test("updates IPC keeps exact noargs, trusted main document and foreground mutation guards", async () => {
@@ -454,18 +639,77 @@ async function show(f: Awaited<ReturnType<typeof fixture>>) {
   }), { accepted: true });
 }
 
+test("Linux AppImage offers explicit integration after ready and shares app/tray retry action", async () => {
+  const f = await fixture(false, { platform: "linux", spike: false, appImage: "/Downloads/Chat.AppImage" });
+  try {
+    assert.equal(f.integrationPorts.length, 1); assert.deepEqual(f.integrationCalls, []);
+    const port = f.integrationPorts[0]; assert.ok(port);
+    assert.equal(port.options.appImage, "/Downloads/Chat.AppImage");
+    assert.equal(port.options.iconSourcePath, "/unused-test-bundle/app-icon.png");
+    f.windowEvent("ready-to-show"); await settle();
+    assert.deepEqual(f.integrationCalls, [false]);
+    const action = f.trayMenus[0]?.find((item) => item.label === "Добавить в меню приложений…"); assert.ok(action?.click);
+    assert.ok(f.applicationMenus[0]?.some((item) => Array.isArray(item.submenu) && item.submenu.includes(action)));
+    Reflect.apply(action.click, undefined, []); await settle();
+    assert.deepEqual(f.integrationCalls, [false, true]);
+    const description = { desktopPath: "/home/test/.local/share/applications/chat.desktop", iconPath: "/profile/icon.png",
+      appImagePath: "/Downloads/Chat.AppImage", status: "missing" as const };
+    assert.equal(await port.confirm(description), false);
+    const prompt = f.integrationPrompts.at(-1); assert.ok(prompt);
+    assert.equal(prompt.defaultId, 1); assert.equal(prompt.cancelId, 1);
+    assert.match(prompt.detail ?? "", /без установки/u); assert.ok(prompt.detail?.includes(description.desktopPath));
+    f.setIntegrationAnswer(async () => 0); assert.equal(await port.confirm(description), true);
+    f.setIntegrationAnswer(async () => { f.stop(); return 0; });
+    assert.equal(await port.confirm(description), false, "late approval after Quit cannot register");
+  } finally { f.stop(); }
+});
+
+for (const options of [
+  { platform: "linux", spike: false }, { platform: "linux", spike: true, appImage: "/Chat.AppImage" },
+  { platform: "darwin", spike: false, appImage: "/Chat.AppImage" }, { platform: "win32", spike: false, appImage: "/Chat.AppImage" },
+]) test(`no AppImage integration outside production Linux AppImage: ${JSON.stringify(options)}`, async () => {
+  const f = await fixture(false, options);
+  try { assert.deepEqual(f.integrationPorts, []); }
+  finally { f.stop(); }
+});
+
+test("Linux registration resends the latest count and never restores previous account data", async () => {
+  const f = await fixture(false, { platform: "linux", spike: false, appImage: "/Chat.AppImage", captureBadgeTimers: true });
+  try {
+    const port = f.integrationPorts[0]; assert.ok(port);
+    f.invoke(contract.IPC.setBadge, 12); port.onResult("registered", true);
+    assert.equal(f.badgeCalls.at(-1), 12); assert.equal(f.badgeRefreshes.length, 2);
+    f.invoke(contract.IPC.setAccount, "bob");
+    for (const refresh of f.badgeRefreshes) refresh();
+    assert.deepEqual(f.badgeCalls.slice(-2), [0, 0], "cache-refresh timers never replay a captured previous account count");
+    f.invoke(contract.IPC.setBadge, 4); f.badgeRefreshes[0]();
+    assert.equal(f.badgeCalls.at(-1), 4, "a pending refresh uses the latest authoritative unread value");
+    f.windowEvent("show"); assert.equal(f.badgeCalls.at(-1), 4);
+    f.stop(); const before = f.badgeCalls.length; port.onResult("registered", true);
+    for (const refresh of f.badgeRefreshes) refresh();
+    assert.equal(f.badgeCalls.length, before);
+  } finally { f.stop(); }
+});
+
 for (const platform of ["linux", "darwin", "win32"]) {
   test(`${platform} main advertises only supported badge API and forwards valid counts`, async () => {
     const f = await fixture(false, { platform });
     try {
       const capabilities = f.invoke(contract.IPC.capabilities); assert.ok(contract.isRecord(capabilities));
-      assert.equal(capabilities.badge, platform !== "win32");
+      assert.equal(capabilities.badge, true);
       f.invoke(contract.IPC.setBadge, 7); f.invoke(contract.IPC.setBadge, 999999); f.invoke(contract.IPC.setBadge, 0);
       assert.deepEqual(f.badgeCalls, platform === "win32" ? [] : [7, 999999, 0]);
+      if (platform === "win32") {
+        assert.deepEqual(f.overlayCalls.slice(-3).map((call) => call.description), ["Непрочитанных: 7", "Непрочитанных: 999999", ""]);
+        assert.ok(f.overlayCalls.at(-3)?.image);
+        assert.ok(f.overlayCalls.at(-2)?.image);
+        assert.equal(f.overlayCalls.at(-1)?.image, null);
+        assert.deepEqual(f.bitmapCalls.slice(-2), [taskbarBadge.renderBadgeBitmap(7), taskbarBadge.renderBadgeBitmap(999999)]);
+      } else assert.deepEqual(f.overlayCalls, []);
     } finally { f.stop(); }
   });
 
-  test(`${platform} account switch, logout and auth success clear badge without changing Windows support`, async () => {
+  test(`${platform} account switch, logout and auth success clear badge`, async () => {
     const f = await fixture(false, { platform, spike: false });
     try {
       f.invoke(contract.IPC.setAccount, "alice"); f.invoke(contract.IPC.setBadge, 9);
@@ -473,6 +717,12 @@ for (const platform of ["linux", "darwin", "win32"]) {
       f.invoke(contract.IPC.setAccount, null); f.invoke(contract.IPC.setBadge, 2);
       f.authSuccess();
       assert.deepEqual(f.badgeCalls, platform === "win32" ? [] : [0, 9, 0, 3, 0, 2, 0]);
+      if (platform === "win32") {
+        assert.deepEqual(f.overlayCalls.slice(-7).map((call) => call.description), ["", "Непрочитанных: 9", "", "Непрочитанных: 3", "", "Непрочитанных: 2", ""]);
+        assert.equal(f.overlayCalls.at(-1)?.image, null);
+        f.windowEvent("show");
+        assert.equal(f.overlayCalls.at(-1)?.image, null, "replay cannot restore the previous account badge");
+      }
     } finally { f.stop(); }
   });
 
@@ -493,8 +743,8 @@ for (const platform of ["linux", "darwin", "win32"]) {
   });
 }
 
-test("Linux badge IPC rejects invalid counts, arity and untrusted documents before OS calls", async () => {
-  const f = await fixture(false, { platform: "linux" });
+for (const platform of ["linux", "win32"]) test(`${platform} badge IPC rejects invalid counts, arity and untrusted documents before OS calls`, async () => {
+  const f = await fixture(false, { platform });
   try {
     for (const count of [-1, 1000000, 1.5, NaN, Infinity, "3", null, undefined, {}, []]) {
       assert.throws(() => f.invoke(contract.IPC.setBadge, count));
@@ -510,6 +760,41 @@ test("Linux badge IPC rejects invalid counts, arity and untrusted documents befo
     ]) assert.throws(() => handler(sender, 3));
     f.frame.origin = "null"; assert.throws(() => f.invoke(contract.IPC.setBadge, 3));
     assert.deepEqual(f.badgeCalls, []);
+    assert.equal(f.overlayCalls.some((call) => call.image !== null), false);
+  } finally { f.stop(); }
+});
+
+test("Windows latest badge replays on show, ready and replacement without updating a closed owner", async () => {
+  const f = await fixture(false, { platform: "win32" });
+  try {
+    f.invoke(contract.IPC.setBadge, 42);
+    for (const event of ["show", "ready-to-show"]) {
+      const before = f.overlayCalls.length;
+      f.windowEvent(event);
+      assert.ok(f.overlayCalls.length > before);
+      assert.equal(f.overlayCalls.at(-1)?.description, "Непрочитанных: 42");
+    }
+    f.windowEvent("closed"); await settle();
+    assert.equal(f.windowOptions.length, 2);
+    assert.equal(f.overlayCalls.at(-1)?.window, 2);
+    assert.equal(f.overlayCalls.at(-1)?.description, "Непрочитанных: 42");
+    f.stop();
+    const before = f.overlayCalls.length;
+    f.windowEvent("show");
+    assert.equal(f.overlayCalls.length, before);
+  } finally { f.stop(); }
+});
+
+test("Windows overlay failure stays safe and retries latest count on show", async () => {
+  const f = await fixture(false, { platform: "win32" });
+  try {
+    f.setOverlayFails(true);
+    assert.doesNotThrow(() => f.invoke(contract.IPC.setBadge, 12));
+    assert.doesNotThrow(() => f.windowEvent("show"));
+    assert.match(await f.diagnostic() ?? "", /Badge недоступен/u);
+    f.setOverlayFails(false);
+    f.windowEvent("show");
+    assert.equal(f.overlayCalls.at(-1)?.description, "Непрочитанных: 12");
   } finally { f.stop(); }
 });
 
@@ -559,7 +844,7 @@ for (const platform of ["darwin", "win32", "linux"]) {
       const application = menu.find((item) => item.label === "Chat Desktop Spike"); assert.ok(Array.isArray(application?.submenu));
       const tray = f.trayMenus[0]; assert.ok(tray);
       assert.deepEqual(Array.from(tray, (item) => item.label ?? item.type), [
-        "Открыть", "Скрыть окно", "Повторить загрузку", "Сменить сервер…", "Диагностика фокуса и ограничений",
+        "Открыть", "Скрыть окно", "Перезагрузить клиент…", "Сменить сервер…", "Диагностика фокуса и ограничений",
         "Тестовое уведомление (--spike)", "Очистить уведомления", "separator", "Выход",
       ]);
       assert.equal(tray.some((item) => item.role === "hide" || item.role === "minimize"), false);

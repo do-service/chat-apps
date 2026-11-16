@@ -22,6 +22,8 @@ import { createElectronAuthAttempt, installAuthCookieBarrier } from "./electron-
 import { confirmExternalLink } from "./external-link-dialog";
 import { UpdateService, UPDATE_INTERVAL } from "./updates";
 import { createElectronUpdatePort } from "./electron-updates";
+import { renderBadgeBitmap } from "./taskbar-badge";
+import { createLinuxDesktopIntegration } from "./linux-desktop-integration";
 import { UPDATE_IPC } from "./update-ipc";
 import {
   ERROR_URL, SPIKE_ORIGIN, TRUSTED_ORIGIN_ARGUMENT, externalHTTPSURL, isAllowedFrameNavigation, isTrustedSender, isTrustedURL,
@@ -45,6 +47,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow: BrowserWindow | null = null;
+let latestBadgeCount = 0;
 let mediaNavigationGeneration = 0;
 let tray: Tray | null = null;
 let notifications: NotificationService | null = null;
@@ -61,6 +64,9 @@ let pendingFocus = false;
 let restoreMissingWindow: (() => void) | null = null;
 let externalPrompt: AbortController | null = null;
 let serverPrompt: AbortController | null = null;
+let reloadPrompt: Promise<void> | null = null;
+let reloadClient: (() => Promise<void>) | null = null;
+let integrateLinuxDesktop: ((manual?: boolean) => Promise<void>) | null = null;
 
 function serverSelectionPath(): string {
   return join(app.getPath("userData"), "server-selection.json");
@@ -136,6 +142,25 @@ function trayIcon(): Electron.NativeImage {
   return nativeImage.createFromPath(join(__dirname, "app-icon.png")).resize({ width: 20, height: 20 });
 }
 
+function applyBadge(count: number): void {
+  latestBadgeCount = count;
+  if (quitting) return;
+  if (process.platform === "win32") {
+    const window = mainWindow;
+    if (!window || window.isDestroyed()) return;
+    try {
+      const bitmap = renderBadgeBitmap(count);
+      const icon = bitmap ? nativeImage.createFromBitmap(bitmap.pixels, {
+        width: bitmap.width, height: bitmap.height, scaleFactor: 1,
+      }) : null;
+      window.setOverlayIcon(icon, count === 0 ? "" : `Непрочитанных: ${count}`);
+    } catch { diagnostic = "Badge недоступен в текущем окружении ОС"; }
+  } else {
+    try { if (!app.setBadgeCount(count)) diagnostic = "Badge недоступен в текущем окружении ОС"; }
+    catch { diagnostic = "Badge недоступен в текущем окружении ОС"; }
+  }
+}
+
 function emit(config: RuntimeConfiguration, event: DesktopEvent): void {
   const window = mainWindow;
   if ((!rendererReady && event.type !== "auth-state") || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
@@ -189,6 +214,11 @@ function registerIPC(
       } catch { throw new Error("Desktop operation failed"); }
     });
   };
+  handle(IPC.reloadClient, 0, (_args, event) => {
+    const current = documentGuard(event, false);
+    if (!current() || !reloadClient) throw new Error("Reload context unavailable");
+    return reloadClient();
+  });
   handle(UPDATE_IPC.getState, 0, () => updates.getState());
   for (const action of ["check", "download", "install", "openRelease"] satisfies Array<keyof typeof UPDATE_IPC>) {
     handle(UPDATE_IPC[action], 0, (_args, event) => {
@@ -241,7 +271,7 @@ function registerIPC(
     externalPrompt?.abort();
     notificationAccount = accountId;
     service.setAccount(accountId);
-    if (badge) app.setBadgeCount(0);
+    if (badge) applyBadge(0);
   });
   handle(IPC.showNotification, 1, async ([request], event) => {
     if (!isNotificationRequest(request)) throw new Error("Invalid notification");
@@ -265,7 +295,7 @@ function registerIPC(
   });
   handle(IPC.setBadge, 1, ([count]) => {
     if (!isBadgeCount(count)) throw new Error("Invalid badge count");
-    if (badge && !app.setBadgeCount(count)) diagnostic = "Badge недоступен в текущем окружении ОС";
+    if (badge) applyBadge(count);
   });
   handle(IPC.ready, 0, () => {
     rendererReady = true;
@@ -345,7 +375,7 @@ function installSessionPolicy(ses: Session, config: RuntimeConfiguration): void 
   ses.protocol.handle("chat-desktop-error", (request) => {
     if (request.url !== ERROR_URL || request.method !== "GET") return new Response(null, { status: 404 });
     if (config.spike) console.info("Desktop recovery page: served");
-    return new Response("<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\"><title>Chat Desktop Spike</title><h1>Chat Desktop Spike: страница недоступна</h1><p>Страница закрыта или недоступна. Получение событий этой страницей приостановлено. Проверьте сеть и настройку HTTPS origin, затем используйте меню «Повторить загрузку» или «Диагностика».</p><p>Вход выполняется только в системном браузере с кодом и явным подтверждением. Переходы к IdP внутри приложения запрещены.</p></html>", {
+    return new Response("<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\"><title>Chat Desktop Spike</title><h1>Chat Desktop Spike: страница недоступна</h1><p>Страница закрыта или недоступна. Получение событий этой страницей приостановлено. Проверьте сеть и настройку HTTPS origin, затем используйте меню «Перезагрузить клиент…» или «Диагностика».</p><p>Вход выполняется только в системном браузере с кодом и явным подтверждением. Переходы к IdP внутри приложения запрещены.</p></html>", {
       headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'" },
     });
   });
@@ -488,7 +518,7 @@ function installWindowPolicy(
     mediaNavigationGeneration++;
     rendererReady = false;
     service.setReady(false);
-    diagnostic = "Renderer завершился; используйте «Повторить загрузку»";
+    diagnostic = "Renderer завершился; используйте «Перезагрузить клиент…»";
     void showErrorPage(window);
   });
   contents.on("unresponsive", () => { diagnostic = "Renderer не отвечает; получение событий не гарантируется"; });
@@ -543,12 +573,12 @@ async function showErrorPage(window: BrowserWindow): Promise<void> {
   }
 }
 
-function installMenus(config: RuntimeConfiguration, service: NotificationService, loadTarget: () => void): void {
+function installMenus(config: RuntimeConfiguration, service: NotificationService, reload: () => Promise<void>): void {
   const diagnostics = async () => {
     const state = windowState();
     await dialog.showMessageBox({
       type: "info", title: "Chat Desktop Spike — диагностика", message: diagnostic,
-      detail: `Режим: ${config.spike ? "локальный --spike" : "HTTPS оболочка"}\nФокус: ${state.focused}; видно: ${state.visible}; свёрнуто: ${state.minimized}\nNative notifications API: ${service.supported()} (не гарантия показа ОС)\n${process.platform === "linux" ? `Badge Linux: LauncherEntry; успешный вызов API не гарантирует видимый счётчик. Нужны поддержка dock/taskbar и установленный ${APP_ID}.desktop.\n` : ""}Крестик скрывает окно; «Выход» завершает получение событий.\nСистемный вход: ${config.spike ? "выключен в --spike" : "реализован; сервер и IdP требуют отдельной приёмки"}. Микрофон и камера: только доверенное главное окно macOS с отдельным согласием ОС для каждого устройства; демонстрация экрана запрещена.`,
+      detail: `Режим: ${config.spike ? "локальный --spike" : "HTTPS оболочка"}\nФокус: ${state.focused}; видно: ${state.visible}; свёрнуто: ${state.minimized}\nNative notifications API: ${service.supported()} (не гарантия показа ОС)\n${process.platform === "linux" ? `Badge Linux: LauncherEntry; успешный вызов API не гарантирует видимый счётчик. Нужны поддержка панели и зарегистрированный ${APP_ID}.desktop. Для AppImage используйте меню «Добавить в меню приложений…».\n` : ""}Крестик скрывает окно; «Выход» завершает получение событий.\nСистемный вход: ${config.spike ? "выключен в --spike" : "реализован; сервер и IdP требуют отдельной приёмки"}. Микрофон и камера: только доверенное главное окно macOS с отдельным согласием ОС для каждого устройства; демонстрация экрана запрещена.`,
     });
   };
   const menuOperation = (operation: () => void) => () => {
@@ -558,9 +588,11 @@ function installMenus(config: RuntimeConfiguration, service: NotificationService
   const actions: MenuItemConstructorOptions[] = [
     { label: "Открыть", click: focusWindow },
     { label: "Скрыть окно", accelerator: "CommandOrControl+W", click: () => mainWindow?.close() },
-    { label: "Повторить загрузку", click: loadTarget },
+    { label: "Перезагрузить клиент…", accelerator: "CommandOrControl+Shift+R",
+      click: () => { void reload().catch(() => { diagnostic = "Не удалось перезагрузить клиент; повторите действие через меню приложения"; }); } },
     { label: "Сменить сервер…", enabled: !config.spike && process.env.DESKTOP_APP_URL === undefined,
       click: () => { void changeServer(config); } },
+    ...(integrateLinuxDesktop ? [{ label: "Добавить в меню приложений…", click: () => { focusWindow(); void integrateLinuxDesktop?.(true); } }] : []),
     { label: "Диагностика фокуса и ограничений", click: () => { void diagnostics().catch(() => { diagnostic = "Диалог диагностики недоступен"; }); } },
     { label: "Тестовое уведомление (--spike)", enabled: config.spike, click: menuOperation(() => {
       if (!config.spike) return;
@@ -663,8 +695,7 @@ async function start(): Promise<void> {
   });
   setStartupStage("notification-history-requested");
   // Linux LauncherEntry is best effort: a successful API call does not prove a dock received it.
-  // Windows taskbar overlays remain unsupported.
-  const badge = os === "darwin" || os === "linux";
+  const badge = os === "darwin" || os === "linux" || os === "win32";
   setStartupStage("registering-ipc");
   const updatePort = createElectronUpdatePort(config, os, { window: () => mainWindow });
   const updates = new UpdateService({ platform: os, currentVersion: app.getVersion(), mode: updatePort.mode, port: updatePort.port,
@@ -675,6 +706,40 @@ async function start(): Promise<void> {
   });
   nativeUpdates = updates;
   registerIPC(config, service, badge, permission, updates);
+  if (os === "linux" && !config.spike && process.env.APPIMAGE) {
+    integrateLinuxDesktop = createLinuxDesktopIntegration({
+      options: { platform: os, appImage: process.env.APPIMAGE, xdgDataHome: process.env.XDG_DATA_HOME,
+        homeDirectory: app.getPath("home"), userDataDirectory: app.getPath("userData"), iconSourcePath: join(__dirname, "app-icon.png") },
+      current: () => !quitting && Boolean(mainWindow && !mainWindow.isDestroyed()),
+      confirm: async (description) => {
+        const parent = mainWindow;
+        if (quitting || !parent || parent.isDestroyed()) return false;
+        focusWindow();
+        const answer = await dialog.showMessageBox(parent, {
+          type: "question", title: "Счётчик на панели", message: "Добавить Chat в меню приложений?",
+          detail: `AppImage работает без установки. Для счётчика на панели KDE нужен пользовательский ярлык.\n\nФайл приложения: ${description.appImagePath}\nЯрлык: ${description.desktopPath}\nИконка: ${description.iconPath}\n\nПрава администратора не нужны. Настройки панели и чужие ярлыки не изменяются. Если переместить AppImage, ярлык потребуется обновить через это меню.`,
+          buttons: ["Добавить ярлык", "Не сейчас"], defaultId: 1, cancelId: 1, noLink: true,
+        });
+        return answer.response === 0 && !quitting && mainWindow === parent && !parent.isDestroyed();
+      },
+      onResult: (result, manual) => {
+        if (quitting) return;
+        if (result === "registered") {
+          diagnostic = "Ярлык добавлен. Счётчик зависит от настроек панели; старый закреплённый значок может потребовать перепривязки";
+          applyBadge(latestBadgeCount);
+          // KDE rebuilds its desktop-service cache asynchronously; replay the current account's latest count, not a captured value.
+          for (const delay of [1000, 3000]) setTimeout(() => { if (!quitting) applyBadge(latestBadgeCount); }, delay).unref();
+        } else if (result === "unchanged" && manual) diagnostic = "Ярлык уже настроен; проверьте разрешение счётчиков и закреплённый значок панели";
+        if (manual && (result === "registered" || result === "unchanged")) {
+          void dialog.showMessageBox({ type: "info", title: "Интеграция с панелью", message: diagnostic }).catch(() => { diagnostic = "Ярлык настроен; диалог результата недоступен"; });
+        }
+      },
+      onError: (manual) => {
+        diagnostic = "Не удалось добавить ярлык: проверьте доступ к пользовательскому каталогу и отсутствие чужого ярлыка с тем же именем";
+        if (manual && !quitting) dialog.showErrorBox("Интеграция с панелью", diagnostic);
+      },
+    });
+  }
   const createWindow = (showWhenReady: boolean): BrowserWindow => {
     setStartupStage("creating-window");
     const window = new BrowserWindow({
@@ -689,6 +754,15 @@ async function start(): Promise<void> {
       },
     });
     mainWindow = window;
+    if (os === "win32") {
+      const replayBadge = () => { if (mainWindow === window && !window.isDestroyed()) applyBadge(latestBadgeCount); };
+      replayBadge();
+      window.on("show", replayBadge);
+      window.once("ready-to-show", replayBadge);
+    }
+    if (os === "linux") window.on("show", () => {
+      if (mainWindow === window && !window.isDestroyed()) applyBadge(latestBadgeCount);
+    });
     window.on("focus", () => {
       void updates.check(true);
       if (os === "darwin") void permission.get(() => !quitting && mainWindow === window).then((status) => {
@@ -702,13 +776,14 @@ async function start(): Promise<void> {
     window.once("ready-to-show", () => {
       setStartupStage("window-ready");
       if (showWhenReady || pendingFocus) focusWindow();
+      if (showWhenReady) void integrateLinuxDesktop?.();
     });
     return window;
   };
   const recoverHiddenRoot = (): void => {
     if (quitting || (mainWindow && !mainWindow.isDestroyed())) return;
     const window = createWindow(false);
-    diagnostic = "Страница закрыла renderer; создано скрытое окно диагностики. Получение событий страницей приостановлено до «Повторить загрузку»";
+    diagnostic = "Страница закрыла renderer; создано скрытое окно диагностики. Получение событий страницей приостановлено до «Перезагрузить клиент…»";
     // Never reload a self-closing page automatically: the replacement has no scripts or native bridge.
     void showErrorPage(window);
   };
@@ -718,7 +793,7 @@ async function start(): Promise<void> {
     schedule: (callback) => { setImmediate(callback); },
     recoverHidden: () => {
       try { recoverHiddenRoot(); }
-      catch { diagnostic = "Не удалось восстановить скрытое окно; выберите «Открыть» или «Повторить загрузку»"; }
+      catch { diagnostic = "Не удалось восстановить скрытое окно; выберите «Открыть» или «Перезагрузить клиент…»"; }
     },
   });
   restoreMissingWindow = () => {
@@ -728,7 +803,7 @@ async function start(): Promise<void> {
   };
   createWindow(true);
   const loadTarget = () => {
-    const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow(true);
+    const window = mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed() ? mainWindow : createWindow(true);
     diagnostic = config.spike ? "Локальный сценарий D1; реальные сообщения не подключены" : "HTTPS оболочка; системный вход поддержан, IdP/deployment не проверены";
     void window.loadURL(config.appURL).catch((error: unknown) => {
       if (isAbortedNavigation(error)) return;
@@ -783,14 +858,60 @@ async function start(): Promise<void> {
         notificationAccountGeneration++;
         externalPrompt?.abort();
         notificationAccount = null;
-        try { service.setAccount(null); if (badge) app.setBadgeCount(0); }
+        try { service.setAccount(null); if (badge) applyBadge(0); }
         catch { diagnostic = "Вход завершён; не удалось очистить локальные уведомления предыдущего аккаунта"; }
         loadTarget();
       },
     });
   }
   setStartupStage("installing-menus");
-  installMenus(config, service, loadTarget);
+  reloadClient = () => {
+    if (reloadPrompt) return reloadPrompt;
+    const operation = async () => {
+      if (quitting) return;
+      const window = mainWindow;
+      const alive = Boolean(window && !window.isDestroyed());
+      const contents = alive ? window?.webContents : undefined;
+      const live = Boolean(contents && !contents.isDestroyed());
+      const frame = live ? contents?.mainFrame : undefined;
+      const url = live ? contents?.getURL() : undefined;
+      const frameURL = frame?.url;
+      const frameOrigin = frame?.origin;
+      const navigation = mediaNavigationGeneration;
+      const account = notificationAccountGeneration;
+      if (live && contents?.isLoadingMainFrame()) return;
+      const trusted = Boolean(frame && !frame.isDestroyed() && frame.url === url && isTrustedSender({
+        expectedContents: true, mainFrame: frame.parent === null, frameOrigin: frame.origin, frameURL: frame.url,
+      }, config.trustedOrigin));
+      // Recovery never turns an arbitrary document into a reload target.
+      if (live && !trusted && url !== ERROR_URL && url !== "about:blank" && url !== "") return;
+      if (alive) focusWindow();
+      const options: Electron.MessageBoxOptions = {
+        type: "warning", title: "Перезагрузить клиент?", message: "Перезагрузить клиент?",
+        detail: "Текущий звонок и передача файлов могут быть прерваны.",
+        buttons: ["Перезагрузить", "Отмена"], defaultId: 1, cancelId: 1, noLink: true,
+      };
+      const answer = alive && window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+      if (answer.response !== 0 || quitting || window !== mainWindow || navigation !== mediaNavigationGeneration
+        || account !== notificationAccountGeneration || alive !== Boolean(window && !window.isDestroyed())) return;
+      if (live) {
+        if (!window || !contents || window.webContents !== contents || contents.isDestroyed()
+          || contents.isLoadingMainFrame() || contents.getURL() !== url || contents.mainFrame !== frame
+          || !frame || frame.isDestroyed() || frame.url !== frameURL || frame.origin !== frameOrigin) return;
+        if (trusted) {
+          if (!isTrustedSender({ expectedContents: true, mainFrame: frame.parent === null,
+            frameOrigin: frame.origin, frameURL: frame.url }, config.trustedOrigin)) return;
+          contents.reloadIgnoringCache();
+          return;
+        }
+      } else if (contents && !contents.isDestroyed()) return;
+      loadTarget();
+    };
+    const pending = operation().finally(() => { if (reloadPrompt === pending) reloadPrompt = null; });
+    reloadPrompt = pending;
+    return pending;
+  };
+  installMenus(config, service, reloadClient);
   powerMonitor.on("resume", () => {
     emit(config, { type: "window-state", state: windowState() });
     emit(config, { type: "resume" });

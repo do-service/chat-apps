@@ -69,6 +69,10 @@ if (process.isMainFrame && window.top === window && trustedOrigin
       if (!isBadgeCount(count)) throw new Error("Invalid badge count");
       await ipcRenderer.invoke(IPC.setBadge, count);
     },
+    async reloadClient(...args: unknown[]) {
+      if (args.length !== 0) throw new Error("Invalid reload arguments");
+      await ipcRenderer.invoke(IPC.reloadClient);
+    },
     async ready() { await ipcRenderer.invoke(IPC.ready); },
     onEvent(listener) {
       if (typeof listener !== "function" || subscriptions >= 32) throw new Error("Invalid desktop subscription");

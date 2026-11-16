@@ -14,6 +14,7 @@ export const IPC = {
   clearNotifications: "chat-desktop:v1:clear-notifications",
   dismissNotifications: "chat-desktop:v1:dismiss-notifications",
   setBadge: "chat-desktop:v1:set-badge",
+  reloadClient: "chat-desktop:v1:reload-client",
   ready: "chat-desktop:v1:ready",
   event: "chat-desktop:v1:event",
 } as const;
@@ -83,6 +84,7 @@ export type DesktopBridge = {
   clearNotifications(): Promise<void>;
   dismissNotifications?(selector: NotificationDismissal): Promise<void>;
   setBadge(count: number): Promise<void>;
+  reloadClient?(): Promise<void>;
   ready(): Promise<void>;
   onEvent(listener: (event: DesktopEvent) => void): () => void;
 };

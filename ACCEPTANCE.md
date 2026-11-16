@@ -1,31 +1,39 @@
 # Desktop acceptance
 
-Дата подготовки preview.3: **2026-11-15**. Объект: standalone `Chat Desktop Spike` `0.1.1-preview.3`, app ID `ru.exz-vps.chat.desktop.spike`, все четыре desktop installers; Android исключён. Обзор, ограничения signing и ожидаемые ссылки загрузок — в [README.md](<README.md>). Новые CI/installers и публикация preview.3 **ещё не подтверждены**; Lead заполнит фактическое evidence после отдельных проверок. Предыдущий [публичный prerelease `v0.1.1-preview.2`](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.2) опубликован 2026-11-12. История preview.2/preview.1/`0.1.0` ниже **не является результатами preview.3**.
+Дата подготовки preview.4: **2026-11-16**. Объект: standalone `Chat Desktop Spike` `0.1.1-preview.4`, app ID `ru.exz-vps.chat.desktop.spike`, все четыре desktop installers; Android исключён. Обзор, ограничения signing и ожидаемые ссылки загрузок — в [README.md](<README.md>). Новые CI/installers и публикация preview.4 **ещё не подтверждены**; Lead заполнит фактическое evidence после отдельных проверок. Предыдущий [публичный prerelease `v0.1.1-preview.3`](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.3) опубликован 2026-11-15. История preview.3/preview.2/preview.1/`0.1.0` ниже **не является результатами preview.4**.
 
-## Подготовка preview.3 — 2026-11-15
+## Подготовка preview.4 — 2026-11-16
 
-Версия manifest и двух корневых version-полей lockfile — `0.1.1-preview.3`; pinned зависимости и прежняя identity сохраняются. В поставку включаются текущий updater и host picker с default `https://chat.krista.ru`; сохранённый выбор сервера не должен сбрасываться. Это состав подготовки, не evidence установленного приложения.
+Версия manifest и двух корневых version-полей lockfile — `0.1.1-preview.4`; pinned зависимости и прежняя identity сохраняются. В поставку включаются Windows taskbar overlay, явная пользовательская интеграция AppImage/Linux, native reload с cancel-default подтверждением, прежние цветные иконки всех ОС, updater и host picker с default `https://chat.krista.ru`; сохранённый выбор сервера не должен сбрасываться. Это состав подготовки, не evidence установленного приложения.
 
 [Desktop workflow](<.github/workflows/desktop.yml>) использует [отдельные desktop policy tests](<scripts/desktop-release-workflow.test.mjs>) без Android release inputs. `--preview` в [artifact helper](<scripts/artifacts.mjs>) разрешает только следующие outputs (в каждом platform artifact свой manifest):
 
 ```text
-release/chat-desktop-spike-0.1.1-preview.3-win-x64.exe
-release/chat-desktop-spike-0.1.1-preview.3-win-x64.exe.blockmap
+release/chat-desktop-spike-0.1.1-preview.4-win-x64.exe
+release/chat-desktop-spike-0.1.1-preview.4-win-x64.exe.blockmap
 release/preview.yml
-release/chat-desktop-spike-0.1.1-preview.3-mac-arm64.dmg
-release/chat-desktop-spike-0.1.1-preview.3-mac-x64.dmg
-release/chat-desktop-spike-0.1.1-preview.3-linux-x86_64.AppImage
+release/chat-desktop-spike-0.1.1-preview.4-mac-arm64.dmg
+release/chat-desktop-spike-0.1.1-preview.4-mac-x64.dmg
+release/chat-desktop-spike-0.1.1-preview.4-linux-x86_64.AppImage
 release/preview-linux.yml
 release/SHA256SUMS.txt
 ```
 
 Единый manifest будущего Release должен содержать SHA-256 семи payload files: четыре installers, NSIS blockmap и два YAML. Сам manifest не хеширует себя. YAML проверяются по exact version/asset/size/SHA-512 и содержимому blockmap chunks, а не только по расширению; посторонние файлы не публикуются. macOS остаётся DMG-only без ZIP/YAML.
 
-Linux writable packaged AppImage N→N+1 — NOT RUN. Unsigned Windows — external/manual fallback, не trusted signature-verified install; нельзя отключать signature verification. macOS — external DMG, ad-hoc, без Developer ID/notarization. CI, новая упаковка, публикация, host-picker installed checks, реальный IdP, notifications и OS matrix preview.3 — NOT RUN до отдельного evidence. Старым бинарникам нужен ручной bootstrap. Android signing/release и его документация исключены.
+Linux writable packaged AppImage N→N+1 — NOT RUN. Unsigned Windows — external/manual fallback, не trusted signature-verified install; нельзя отключать signature verification. macOS — external DMG, ad-hoc, без Developer ID/notarization. CI, новая упаковка, публикация, host-picker installed checks, реальный IdP, notifications и OS matrix preview.4 — NOT RUN до отдельного evidence. Старым бинарникам нужен ручной bootstrap. Android signing/release и его документация исключены.
 
-Изолированная проверка metadata/CI 2026-11-15: RED новой desktop policy выявил импорт смешанного Android policy suite; после замены импорта GREEN — 51/51 tests PASS, 0 skipped (`artifacts.test.mjs`, `artifacts-preview.test.mjs`, `desktop-release-workflow.test.mjs`), exit 0. Fixtures используют отдельные temp directories, не shared dist. Full typecheck/app tests/build переданы Lead; отдельного lint script нет.
+Историческая проверка metadata/CI preview.3 от 2026-11-15: RED новой desktop policy выявил импорт смешанного Android policy suite; после замены импорта GREEN — 51/51 tests PASS, 0 skipped (`artifacts.test.mjs`, `artifacts-preview.test.mjs`, `desktop-release-workflow.test.mjs`), exit 0. Это не прогон preview.4. Fixtures используют отдельные temp directories, не shared dist. Свежие typecheck/app/helper tests/build preview.4 и artifact gates выполняются отдельно; отдельного lint script нет.
 
 Проверка private-source exposure: builder включает desktop bundles/manifest и необходимые runtime dependencies, build отключает source maps; repository source payload, frontend/backend snapshot, ключи и профили не добавляются. Реальные ASAR/installer contents новой версии должны быть отдельно проверены после packaging; static config не доказывает их состав.
+
+### Локальная проверка кандидата preview.4 — 2026-11-16
+
+- Lead: **730/730 desktop tests**, **51/51 desktop artifact/policy tests**, 0 skipped/cancelled, strict TypeScript, production/native build с `DESKTOP_UPDATE_DISTRIBUTION=github-preview` и `git diff --check` — PASS. Это локальный кандидат, не hosted CI/installer/OS evidence.
+- Синхронизированы reload и badge/Linux consent; 10 implementation-файлов побайтово совпадают с reviewed source, в main/main-test сохранены выпущенные public-only all-OS иконки. Остальные standalone Windows path/POSIX/CRLF adapters сохранены. Source monorepo и восемь Android signing/release dirty files не изменялись.
+- Новый Windows overlay, Linux consent/foreign-file/atomic-write failure/retry и delayed latest replay покрыты тестами; не заявлены реальный показ счётчика, Explorer restart, KDE X11/Wayland или first native prompt.
+- Свежий `npm audit --json`: exit 1, **6 moderate / 0 high / 0 critical**, прежняя build-time minimatch advisory; зависимости не обновлялись и «чистыми» не объявляются. Отдельного lint script нет.
+- Публичный tag/release создаётся только после проверки fresh single CI run, всех четырёх installers, updater metadata/blockmaps, реальных ASAR/signatures/icons и независимого ревью. Android/сайт/ключи/production signing не входят в scope.
 
 ## Статус и правила evidence
 
@@ -47,7 +55,7 @@ Linux writable packaged AppImage N→N+1 — NOT RUN. Unsigned Windows — exter
 | Проверка | Статус / граница evidence |
 | --- | --- |
 | Desktop metadata/blockmap RED/GREEN | RED: 16 новых behavior tests ожидаемо FAIL без preview mode; GREEN: новые 16 + прежние 18 tests PASS. SHA-512 проверяется по exact installer bytes; gzip NSIS / embedded AppImage blockmap chunks сверяются с installer. Не подтверждает настоящие installers |
-| Историческая desktop helper coverage | Desktop helper + preview validator: 38 tests, 100% lines/branches/functions (Node test coverage); real pinned-builder multi-chunk blockmaps/YAML fixtures и macOS no-ZIP. Reports на диск не создавались. Это прежний результат, не прогон preview.3 |
+| Историческая desktop helper coverage | Desktop helper + preview validator: 38 tests, 100% lines/branches/functions (Node test coverage); real pinned-builder multi-chunk blockmaps/YAML fixtures и macOS no-ZIP. Reports на диск не создавались. Это прежний результат, не прогон preview.4 |
 | Syntax и исходный pre-sync typecheck | JavaScript `node --check`, Python AST parse, YAML parse и `bash -n` изменённых workflow run snippets — PASS; исходный pre-sync typecheck также PASS. Этот промежуточный результат не подменяет следующий полный прогон |
 | Full standalone typecheck/app tests/build после final sync | PASS, независимо повторено Lead: `npm run build` (strict TypeScript + native addon), отдельный typecheck, 452/452 desktop tests, 88/88 Node helpers, 64/64 Python tests, `git diff --check`. Без skips, app launch, installer packaging и CI. Отдельного lint script нет; реальные OS/signing сценарии этим не проверены |
 | Windows NSIS updater | Текущий unsigned preview: external/manual fallback, **не** signature-verified install. Install требует future expected publisherName + valid Authenticode и отдельный N→N+1 тест. Запрещено отключать signature verification |
@@ -66,7 +74,7 @@ Desktop implementation и regression tests: [desktop helper](<scripts/artifacts.
 | macOS notification consent | [Controller](<src/notification-permission.ts>) и [native addon](<native/notification-permission.mm>) читают/запрашивают OS consent в main process; запрос требует явного действия через compatible frontend и текущий trusted foreground context | Первый системный диалог, разрешение, banner или повторное предложение в прежнем профиле |
 | macOS hotkeys | [src/main.ts](<src/main.ts>) использует menu roles `minimize`/`hide` для `Cmd+M`/`Cmd+H` только macOS, сохраняет `Cmd+W` close-to-hide и `Cmd+Q` Quit | Реальное поведение клавиатуры и menu/Dock на установленном Mac |
 | External HTTPS confirmation | [Диалог](<src/external-link-dialog.ts>), [локальный документ](<src/external-link-document.ts>) и [preload](<src/external-link-preload.ts>) задают expressive modal, темы ОС, host/URL, начальный фокус «Отмена» и fail-closed ответ; main повторно проверяет документ/account/окно | Реальный внешний браузер, OS light/dark, keyboard/scroll/focus и safe cancel установленного приложения |
-| Linux icon / badge | Canonical [PNG](<build/icons/icon.png>) используется для main window и packaging; `desktopName` и `linux.syncDesktopName` согласованы с `ru.exz-vps.chat.desktop.spike.desktop`; runtime использует best-effort LauncherEntry | Иконка старого pin, установленный matching `.desktop`, поддержка dock/taskbar и видимый счётчик; Windows badge не поддерживается |
+| Native icon / badge | Canonical [PNG](<build/icons/icon.png>) используется на всех ОС; Windows `setOverlayIcon` показывает `1…99`/`99+`, macOS сохраняет Dock API, Linux — best-effort LauncherEntry; AppImage registration только после native consent, без чужих overwrite | Реальный счётчик Windows/KDE, настройки панели/DND, старые pins/cache, Linux X11/Wayland и фактическая привязка к зарегистрированному desktop entry |
 | Renderer isolation | [src/main.ts](<src/main.ts>) задаёт sandbox/context isolation, отключает Node integration; [src/security.ts](<src/security.ts>) проверяет origin/frame и payload | Полная security-приёмка установленного приложения |
 | Native notifications | [src/notifications.ts](<src/notifications.ts>) содержит account binding, dedup, grouping, TTL и activation validation | Реальный banner, звук, центр ОС и cold-start activation |
 | Auth | [src/desktop-auth.ts](<src/desktop-auth.ts>) и [src/electron-auth.ts](<src/electron-auth.ts>) реализуют system-browser transaction/exchange/ack | Наличие server endpoints, реальный IdP, успешный вход |
@@ -100,7 +108,7 @@ npm audit
 | --- | --- |
 | Version/lock/Linux metadata | Изменены manifest version/desktopName, только два корневых version-поля lockfile и `linux.syncDesktopName`; это не build или runtime evidence |
 | Полный standalone typecheck/tests/artifact-helper/build | Lead, локально 2026-11-12: Node 24.19.0 / npm 11.17.0; `npm run build`, отдельный `npm run typecheck`, desktop 412/412 (0 skipped), artifact-helper 18/18 (0 skipped) — PASS, всё exit 0. Helper coverage: 100% lines/branches/functions; normal build с approved remote origin, универсальный native addon arm64 + x86_64. Это не CI/installer/installed/OS-consent acceptance; отдельного lint script нет |
-| GitHub Actions, четыре installers и SHA-256 | История preview.2: [run 43214770881](https://github.com/do-service/chat-apps/actions/runs/43214770881); не проверка preview.3 |
+| GitHub Actions, четыре installers и SHA-256 | История preview.2: [run 43214770881](https://github.com/do-service/chat-apps/actions/runs/43214770881); не проверка preview.4 |
 | Tag и публичный prerelease | [v0.1.1-preview.2](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.2) опубликован 2026-11-12; прежние четыре installers и manifest, без updater |
 | External dialog: OS light/dark, keyboard, длинный URL, safe cancel | NOT RUN на установленном приложении |
 | Linux canonical icon, matching desktop entry и LauncherEntry badge | NOT RUN на установленном приложении; видимый badge не гарантирован |
@@ -165,7 +173,7 @@ Windows остановился на загрузке native Electron с HTTP 504
 
 ## Историческая CI-подготовка preview.2 без updater
 
-**Этот раздел сохраняет прежний installer-only профиль `0.1.1-preview.2`, до новой подготовки updater transport.** Требования «четыре installers», `publish: null` и «updater не подключён» ниже относятся только к тому профилю, не являются инструкцией будущего updater-релиза. Текущие preview.3 metadata/blockmap allowlists, build marker и запрет автоматической публикации описаны в начале документа. Никакие прежние CI результаты не переносятся на новую сборку.
+**Этот раздел сохраняет прежний installer-only профиль `0.1.1-preview.2`, до новой подготовки updater transport.** Требования «четыре installers», `publish: null` и «updater не подключён» ниже относятся только к тому профилю, не являются инструкцией будущего updater-релиза. Текущие preview.4 metadata/blockmap allowlists, build marker и запрет автоматической публикации описаны в начале документа. Никакие прежние CI результаты не переносятся на новую сборку.
 
 [Desktop workflow](<.github/workflows/desktop.yml>) в прежнем профиле был настроен на стандартные native hosted runners `windows-2025`, `macos-15`, `ubuntu-24.04`, Node `24.19.0` и Actions, закреплённые commit SHA. Для macOS один packaging job создаёт два отдельных DMG: Apple Silicon и Intel. Это описание конфигурации, не утверждение об уже успешном GitHub Actions run.
 
@@ -183,7 +191,7 @@ Actions artifact называется `desktop-test-<platform>-<run_id>-<run_att
 
 macOS CI ad-hoc signing используется только для теста: CLI overrides `mac.identity=-`, `mac.hardenedRuntime=false`, `mac.notarize=false` не меняют базовый hardened config. **Нет Developer ID и notarization; нет утверждения о Gatekeeper trust, OS notification popup или пригодности к production distribution.** Не отключайте системные защиты ради PASS. Windows test installer остаётся unsigned, без trusted signing; Linux требует проверки фактического desktop environment и условий запуска AppImage.
 
-Actions artifacts — не GitHub Release и не автообновление. `publish: null` и `--publish never` запрещают публикацию из packaging; updater не подключён. Публичный prerelease — отдельный ручной шаг после проверки exact commit/run, ZIP contents/digests и SHA-256 всех четырёх installers. Он должен содержать только четыре installers и единый четырёхстрочный `SHA256SUMS.txt`, с `prerelease: true`, без статуса latest. [Страница опубликованного preview.2](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.2) относится только к прежней поставке от 2026-11-12, не к новым файлам preview.3. Публикация preview.1 подтверждена отдельно в историческом разделе. Сборка обеих архитектур на одном macOS runner не доказывает запуск ни на Intel, ни на Apple Silicon.
+Actions artifacts — не GitHub Release и не автообновление. `publish: null` и `--publish never` запрещают публикацию из packaging; updater не подключён. Публичный prerelease — отдельный ручной шаг после проверки exact commit/run, ZIP contents/digests и SHA-256 всех четырёх installers. Он должен содержать только четыре installers и единый четырёхстрочный `SHA256SUMS.txt`, с `prerelease: true`, без статуса latest. [Страница опубликованного preview.2](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.2) относится только к прежней поставке от 2026-11-12, не к новым файлам preview.4. Публикация preview.1 подтверждена отдельно в историческом разделе. Сборка обеих архитектур на одном macOS runner не доказывает запуск ни на Intel, ни на Apple Silicon.
 
 Перед macOS packaging проверьте [build-native prerequisites](<scripts/build-native.mjs>) и наличие universal `arm64`/`x86_64` addon. [Packaging config](<electron-builder.yml>) должен выносить `dist/notification-permission.node` в ASAR-unpacked; отдельно проверяйте подпись addon и приложения, ASAR allowlist и fuses. Packaging/подпись не подтверждают первый OS prompt.
 
@@ -217,7 +225,9 @@ Actions artifacts — не GitHub Release и не автообновление. 
 | External HTTPS dialog: OS light/dark, host/full URL, keyboard/scroll, cancel default | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | External dialog safe cancel: Escape/close/hide/minimize/navigation/account/Quit/crash | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
 | Опасные scheme/popup/iframe/IPC rejected; браузер только после актуального confirm | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
-| Badge: macOS count/reset; Linux LauncherEntry best effort; Windows unsupported | N/A (unsupported) | NOT RUN | NOT RUN | NOT RUN (best effort) |
+| Badge `0 → 1 → 12 → 100 → 0`, account/logout/reset/show/recreation | NOT RUN (native overlay) | NOT RUN | NOT RUN | NOT RUN (LauncherEntry best effort) |
+| Native reload: cancel/default/confirm/stale/account/Quit/recovery | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| AppImage direct launch: consent/decline/menu retry/move/foreign entry/latest replay | N/A | N/A | N/A | NOT RUN (KDE X11/Wayland) |
 | Linux canonical icon, installed matching `.desktop`, старые pins/cache | N/A | N/A | N/A | NOT RUN |
 
 ### Порядок и критерии ручной проверки
@@ -230,8 +240,10 @@ Actions artifacts — не GitHub Release и не автообновление. 
 6. **Lifecycle и hotkeys.** На macOS проверьте отдельно `Cmd+M` (minimize), `Cmd+H` (hide), `Cmd+W` (close-to-hide) и `Cmd+Q` (Quit), восстановление через Dock/menu. macOS roles не должны менять Windows/Linux. Крестик скрывает окно, либо сворачивает при отсутствии tray на Windows/Linux. Окно можно вернуть. Quit завершает процесс; новые события после Quit не получаются. Возможная активация уже доставленного toast — отдельный OS-зависимый сценарий, не фоновое получение. После renderer failure показывается безопасная диагностика без bridge; resume не обещает доставку пропущенных событий.
 7. **Media и deny boundaries.** На macOS в normal remote mode проверьте раздельный OS consent mic/camera, отказ одного устройства при mixed request и повторную проверку текущего main frame после ожидания. Согласие mic не даёт camera. На Windows/Linux mic/camera должны оставаться DENY. На всех ОС display capture/device/browser notifications/File System Access отклоняются; diagnostic mode не разрешает media. Same-origin HTTPS download допускается только при trusted frame/initiator и полностью same-origin redirect chain, с session и native save dialog. Blob, P2P и external downloads запрещены. Отдельно проверьте uploads/file picker/drag-and-drop; их успешность не заявлена. Entitlements и usage strings не являются media acceptance.
 8. **Внешний HTTPS и safe cancel.** Проверьте expressive modal в светлой и тёмной теме ОС: host и полный URL не становятся HTML/ссылкой, длинный адрес прокручивается с клавиатуры, Tab/Shift+Tab остаются в диалоге, фокус виден и начинает с «Отмена». Enter на области URL не открывает браузер; открытие допускается только кнопкой «Открыть в браузере». «Отмена», крестик, Escape и `Cmd/Ctrl+W` не открывают URL. Отдельно проверьте hide/minimize/close parent, navigation/reload, смену account, Quit, crash и ошибку загрузки: старый положительный ответ не должен оживить запрос. После явного confirm открывается только исходный валидированный HTTPS URL, пока текущие document/account/видимое окно не изменились. Это не замена отдельному system-browser auth flow.
-9. **Linux icon и badge.** Зафиксируйте desktop environment, dock/taskbar и установленный `ru.exz-vps.chat.desktop.spike.desktop`. Проверьте canonical icon главного окна/launcher и count/reset на поддерживающем LauncherEntry окружении; успешный API не равен видимому badge. AppImage/source/unpacked без matching установленного `.desktop`, неподдерживающий dock, старый pin или cache не подтверждают интеграцию. При необходимости отдельно перепроверьте после повторного закрепления корректного launcher; не выдавайте отсутствие поддержки окружением за гарантированный счётчик. Windows badge не реализован.
+9. **Windows/Linux icon и badge.** Проверьте `0 → 1 → 12 → 100 → 0`, прочтение, account switch/logout, восстановление окна и Quit. На Windows overlay показывает `99+` с полным accessibility description; отдельно нужны high-DPI, настройки панели и Explorer restart. На Linux зафиксируйте KDE/другой desktop environment, X11/Wayland и dock/taskbar: прямой запуск скачанного AppImage без установки → отказ (нет ярлыка) → повтор через меню → согласие (пользовательский `ru.exz-vps.chat.desktop.spike.desktop` и стабильная иконка). Проверьте idempotency, перемещение AppImage с новым явным согласием, чужой ярлык без overwrite, latest replay после смены аккаунта. Старые pins/cache могут требовать перепривязки; успешный LauncherEntry API не доказывает видимый badge. DND и пользовательский запрет badges не обходятся.
 10. **Security и privacy.** Проверьте отсутствие прямого bridge у iframe/чужого origin и отказ невалидным IPC/payload, запрет произвольных схем и embedded IdP. Локальный диалог не загружает внешний сайт и не получает bridge сайта; cookies приложения не передаются системному браузеру. Журнал не содержит title/body; идентификаторы и session cookies всё равно требуют защиты и не публикуются вместе с evidence.
+
+11. **Перезагрузка клиента.** Меню/tray и `Ctrl/Cmd+Shift+R` должны открывать одно cancel-default подтверждение. Отмена не перезагружает; согласие перезагружает текущий доверенный документ без cache. Звонок/передача файлов могут оборваться — предупреждение обязательно. Переход, новый account, исчезновение root/contents, loading и Quit обнуляют старое согласие. Восстановление из error/blank/missing root идёт только на fixed configured origin; arbitrary navigation/renderer input не получает reload privilege.
 
 ## Что остаётся за пределами принятого результата
 
