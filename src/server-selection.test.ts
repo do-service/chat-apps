@@ -328,7 +328,7 @@ test("proxy-only saves only from the ready exact source, frame and token and can
   const f = fixture(); const saved: unknown[] = [];
   const result = f.configure({ current: defaultProxy, save: (value) => saved.push(value) });
   const child = f.child();
-  assert.equal(child.options.webPreferences?.preload, "/test-dist/server-selection-preload.cjs");
+  assert.equal(child.options.webPreferences?.preload, path.join("/test-dist", "server-selection-preload.cjs"));
   assert.equal(child.options.webPreferences?.sandbox, true);
   const handle = f.sessions[0]?.protocols.get("chat-server-selection"); assert.ok(handle);
   const html = await handle({ url: child.loaded, method: "GET" }).text();
