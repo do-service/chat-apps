@@ -6,12 +6,18 @@ import * as path from "node:path";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
 import * as document from "./server-selection-document";
+import * as proxySettings from "./proxy-settings";
 import * as security from "./security";
 
 const compiled = spawnSync(process.execPath, ["--input-type=module", "-e",
   'import { transformSync } from "esbuild"; import { readFileSync } from "node:fs"; process.stdout.write(transformSync(readFileSync("src/server-selection.ts", "utf8"), { loader: "ts", format: "cjs", target: "node24" }).code);',
 ], { encoding: "utf8" });
 assert.equal(compiled.status, 0, compiled.stderr);
+
+type ProxyOptions = { current: proxySettings.ProxySettings; needsReset?: boolean; save(value: unknown): void };
+const defaultProxy = { mode: "default", scope: "check" } as const;
+const directProxy = { mode: "direct", scope: "all" };
+const proxyChannel = "chat:server-selection-proxy";
 
 function fixture(failure?: "constructor" | "session" | "load-throw" | "load-reject" | "policy") {
   const ipc = new EventEmitter();
@@ -83,7 +89,10 @@ function fixture(failure?: "constructor" | "session" | "load-throw" | "load-reje
       return Promise.resolve();
     }
   }
-  const module = { exports: { selectServer: (_options: { parent: unknown; initialURL: string; signal: AbortSignal; switching: boolean }): Promise<string | null> => Promise.resolve(null) } };
+  const module: { exports: {
+    selectServer(options: { parent: unknown; initialURL: string; signal: AbortSignal; switching: boolean; proxy?: ProxyOptions }): Promise<string | null>;
+    configureProxy(options: ProxyOptions & { parent?: unknown; signal: AbortSignal }): Promise<boolean>;
+  } } = { exports: { selectServer: async () => null, configureProxy: async () => false } };
   const modules: Record<string, unknown> = {
     electron: { BrowserWindow: Window, nativeTheme: { shouldUseDarkColors: false }, ipcMain: ipc,
       session: { fromPartition: (partition: string) => {
@@ -91,6 +100,7 @@ function fixture(failure?: "constructor" | "session" | "load-throw" | "load-reje
         partitions.push(partition); const f = sessionFixture(); sessions.push(f); return f.ses;
       } } },
     "node:crypto": crypto, "node:path": path, "./server-selection-document": document, "./security": security,
+    "./proxy-settings": proxySettings,
   };
   runInNewContext(compiled.stdout, { module, exports: module.exports, URL, Response, __dirname: "/test-dist", Buffer,
     require: (name: string) => { assert.ok(name in modules, name); return modules[name]; },
@@ -98,14 +108,16 @@ function fixture(failure?: "constructor" | "session" | "load-throw" | "load-reje
     clearTimeout: (id: number) => timers.delete(id),
   });
   const controller = new AbortController();
-  const start = (url = "https://example.com:8443/", standalone = false) => module.exports.selectServer({ parent: standalone ? undefined : parent, initialURL: url, switching: !standalone, signal: controller.signal });
+  const start = (url = "https://example.com:8443/", standalone = false, proxy?: ProxyOptions) => module.exports.selectServer({ parent: standalone ? undefined : parent, initialURL: url, switching: !standalone, signal: controller.signal, proxy });
+  const configure = (proxy: ProxyOptions) => module.exports.configureProxy({ ...proxy, parent, signal: controller.signal });
   const child = () => { const value = windows.at(-1); assert.ok(value, "child window created"); return value; };
   const token = () => {
     const arg = child().options.webPreferences?.additionalArguments?.find((value) => value.startsWith("--chat-server-selection-token="));
     assert.ok(arg); return arg.slice("--chat-server-selection-token=".length);
   };
   const answer = (...args: unknown[]) => ipc.emit("chat:server-selection-choice", { sender: child().contents, senderFrame: child().frame }, ...args);
-  return { parent, windows, partitions, sessions, ipc, messages, controller, start, child, token, answer, timers,
+  const saveProxy = (...args: unknown[]) => ipc.emit(proxyChannel, { sender: child().contents, senderFrame: child().frame }, token(), ...args);
+  return { parent, windows, partitions, sessions, ipc, messages, controller, start, configure, child, token, answer, saveProxy, timers,
     ready: () => child().emit("ready-to-show"),
     parentState: (state: { destroyed?: boolean; visible?: boolean; minimized?: boolean }) => {
       parentDestroyed = state.destroyed ?? parentDestroyed; visible = state.visible ?? visible; minimized = state.minimized ?? minimized;
@@ -119,6 +131,7 @@ function fixture(failure?: "constructor" | "session" | "load-throw" | "load-reje
 
 function assertClean(f: ReturnType<typeof fixture>) {
   assert.equal(f.ipc.listenerCount("chat:server-selection-choice"), 0);
+  assert.equal(f.ipc.listenerCount(proxyChannel), 0);
   assert.equal(f.timers.size, 0);
   for (const name of ["closed", "close", "hide", "minimize"]) assert.equal(f.parent.listenerCount(name), 0, name);
   for (const ses of f.sessions) {
@@ -309,4 +322,59 @@ test("aborted/unavailable parents create no child; pending load timeout cancels;
   for (const timeout of [...f.timers.values()]) timeout(); assert.equal(await first, null); assertClean(f);
   const second = f.start(); f.ready(); assert.notEqual(f.token(), oldToken); assert.notEqual(f.partitions.at(-1), oldPartition);
   f.answer(oldToken, "https://example.com/"); assert.equal(f.child().destroyed, false); f.answer(f.token(), "https://example.com/"); assert.equal(await second, "https://example.com/"); assertClean(f);
+});
+
+test("proxy-only saves only from the ready exact source, frame and token and cannot choose a server", async () => {
+  const f = fixture(); const saved: unknown[] = [];
+  const result = f.configure({ current: defaultProxy, save: (value) => saved.push(value) });
+  const child = f.child();
+  assert.equal(child.options.webPreferences?.preload, "/test-dist/server-selection-preload.cjs");
+  assert.equal(child.options.webPreferences?.sandbox, true);
+  const handle = f.sessions[0]?.protocols.get("chat-server-selection"); assert.ok(handle);
+  const html = await handle({ url: child.loaded, method: "GET" }).text();
+  assert.match(html, /id="proxy-save"/); assert.doesNotMatch(html, /id="server-url"/);
+  f.saveProxy(directProxy); f.ready(); f.answer(f.token(), "https://example.com/");
+  const valid = { sender: child.contents, senderFrame: child.frame };
+  for (const event of [{ ...valid, sender: {} }, { ...valid, senderFrame: null }]) f.ipc.emit(proxyChannel, event, f.token(), directProxy);
+  f.ipc.emit(proxyChannel, valid, "bad token", directProxy);
+  f.saveProxy(directProxy, "extra argument");
+  child.frame.url += "#foreign"; f.saveProxy(directProxy); child.frame.url = child.loaded;
+  assert.deepEqual(saved, []); assert.equal(child.destroyed, false);
+  f.saveProxy(directProxy); assert.equal(await result, true); assert.deepEqual(saved, [directProxy]); assertClean(f);
+});
+
+test("proxy-only reports generic errors and no-op or cancel resolves false; recovery can save defaults", async () => {
+  const f = fixture(); let attempts = 0;
+  const result = f.configure({ current: defaultProxy, save: () => { attempts++; throw new Error("private persistence details"); } });
+  f.ready(); f.saveProxy({ invalid: true }); f.saveProxy(directProxy);
+  assert.equal(attempts, 1);
+  assert.deepEqual(f.messages, Array(2).fill(["chat:server-selection-proxy-result", f.token(), false]));
+  assert.equal(f.child().destroyed, false);
+  f.saveProxy(defaultProxy); assert.equal(await result, false); assert.equal(attempts, 1); assertClean(f);
+  const recovered = f.configure({ current: defaultProxy, needsReset: true, save: () => { attempts++; } });
+  f.ready(); f.saveProxy(defaultProxy); assert.equal(await recovered, true); assert.equal(attempts, 2); assertClean(f);
+  const cancelled = f.configure({ current: defaultProxy, save: () => { attempts++; } });
+  f.ready(); f.saveProxy(null); assert.equal(await cancelled, false); assert.equal(attempts, 2); assertClean(f);
+});
+
+test("inline proxy commits separately, while a server dialog without proxy ignores proxy IPC", async () => {
+  const f = fixture(); const saved: unknown[] = [];
+  const result = f.start(undefined, false, { current: defaultProxy, save: (value) => saved.push(value) });
+  f.ready(); f.saveProxy(directProxy); f.saveProxy(directProxy);
+  assert.equal(f.child().destroyed, false); assert.deepEqual(saved, [directProxy]);
+  f.answer(f.token(), "https://typed.example/"); assert.equal(await result, "https://typed.example/"); assertClean(f);
+  const disabled = f.start(); f.ready(); f.saveProxy(directProxy);
+  assert.equal(f.messages.length, 2); assert.deepEqual(saved, [directProxy]);
+  f.answer(f.token(), null); assert.equal(await disabled, null); assertClean(f);
+});
+
+test("equivalent manual settings are not recommitted, and abort cleans the proxy dialog", async () => {
+  const f = fixture(); let attempts = 0;
+  const options: ProxyOptions = { current: { mode: "https", scope: "check", host: "proxy.example", port: 443 }, save: () => { attempts++; } };
+  const unchanged = f.configure(options);
+  f.ready(); f.saveProxy({ ...options.current, host: "PROXY.Example" });
+  assert.equal(await unchanged, false); assert.equal(attempts, 0); assertClean(f);
+  const aborted = f.configure(options);
+  f.ready(); f.controller.abort(); f.saveProxy(directProxy);
+  assert.equal(await aborted, false); assert.equal(attempts, 0); assertClean(f);
 });

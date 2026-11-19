@@ -9,26 +9,26 @@
 - В [app-config.json](<app-config.json>) задан default origin `https://chat.krista.ru`. Локальный host picker позволяет выбрать сервер; сохранённый выбор имеет приоритет над default. Оболочка использует текущую развёрнутую версию выбранного сайта.
 - Desktop bridge поддерживает выборочное снятие уведомлений и явное macOS-согласие на native notifications. Для полного сценария нужны **обе поставки**: новая оболочка с native addon и совместимый развёрнутый frontend-адаптер. Этот репозиторий не содержит и не развёртывает сайт; состав desktop-сборки не доказывает версию remote frontend или end-to-end результат.
 - Локальный `--spike` — диагностика уведомлений и lifecycle с искусственными событиями, не offline-версия Chat и не проверка реальных сообщений.
-- Версия подготовки preview — `0.1.1-preview.4`. Сохраняются существующие имя `Chat Desktop Spike`, npm package `chat-desktop-spike`, app ID `ru.exz-vps.chat.desktop.spike` и профиль/session partition. Обновление не сбрасывает сохранённые предпочтения пользователя.
+- Версия подготовки preview — `0.1.1-preview.5`. Сохраняются существующие имя `Chat Desktop Spike`, npm package `chat-desktop-spike`, app ID `ru.exz-vps.chat.desktop.spike` и профиль/session partition. Обновление не сбрасывает сохранённые предпочтения пользователя.
 - Публичная доступность репозитория не выдаёт open-source лицензию. В [package.json](<package.json>) остаются `license: UNLICENSED` и `private: true`; последнее запрещает случайную npm-публикацию, а не определяет видимость репозитория.
 
-## Preview и загрузки — подготовка preview.4
+## Preview и загрузки — подготовка preview.5
 
-Готовится публичный **`v0.1.1-preview.4`** для Windows x64, macOS arm64/x64 и Linux x64, не production-релиз. Добавлены счётчик непрочитанных Windows, явная интеграция AppImage с панелью Linux/KDE и native-перезагрузка клиента; сохраняются цветные иконки всех платформ, updater и выбор сервера с default `https://chat.krista.ru`. Android исключён. На 2026-11-16 новые CI/installers и публикация preview.4 **ещё не подтверждены**. Прямые ссылки ниже — ожидаемые адреса после отдельной публикации, до неё могут возвращать 404; `/releases/latest` не является адресом preview.
+Готовится публичный **`v0.1.1-preview.5`** для Windows x64, macOS arm64/x64 и Linux x64, не production-релиз. Добавлены локальные настройки прокси; сохраняются цветные иконки всех платформ, updater и выбор сервера с default `https://chat.krista.ru`. Android исключён. CI-сборки, установщики и публикация preview.5 **ещё не подтверждены**. Прямые ссылки ниже — ожидаемые адреса после отдельной публикации, до неё могут возвращать 404; `/releases/latest` не является адресом preview.
 
-Предыдущий [публичный prerelease `v0.1.1-preview.3`](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.3) опубликован **2026-11-15**: четыре installers, updater metadata/blockmap и `SHA256SUMS.txt`. Также сохранены [preview.2](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.2) и [preview.1](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.1). Это история предыдущих версий, не CI/runtime/OS evidence preview.4. Клиенты без рабочего встроенного updater требуют ручного bootstrap на новую оболочку.
+[Публичный prerelease `v0.1.1-preview.3`](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.3) опубликован **2026-11-15**: четыре installers, updater metadata/blockmap и `SHA256SUMS.txt`. Также сохранены [preview.2](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.2) и [preview.1](https://github.com/do-service/chat-apps/releases/tag/v0.1.1-preview.1). Это история предыдущих версий, не подтверждение CI, запуска или установленной приёмки preview.5. Клиенты без рабочего встроенного updater требуют ручного bootstrap на новую оболочку.
 
-| Платформа | Ожидаемый installer preview.4 |
+| Платформа | Ожидаемый installer preview.5 |
 | --- | --- |
-| Windows x64 | [NSIS .exe](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/chat-desktop-spike-0.1.1-preview.4-win-x64.exe) |
-| macOS Apple Silicon | [DMG arm64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/chat-desktop-spike-0.1.1-preview.4-mac-arm64.dmg) |
-| macOS Intel | [DMG x64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/chat-desktop-spike-0.1.1-preview.4-mac-x64.dmg) |
-| Linux x64 | [AppImage x86_64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/chat-desktop-spike-0.1.1-preview.4-linux-x86_64.AppImage) |
-| Контрольные суммы | [SHA256SUMS.txt — четыре installers и updater metadata/blockmap](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.4/SHA256SUMS.txt) |
+| Windows x64 | [NSIS .exe](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.5/chat-desktop-spike-0.1.1-preview.5-win-x64.exe) |
+| macOS Apple Silicon | [DMG arm64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.5/chat-desktop-spike-0.1.1-preview.5-mac-arm64.dmg) |
+| macOS Intel | [DMG x64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.5/chat-desktop-spike-0.1.1-preview.5-mac-x64.dmg) |
+| Linux x64 | [AppImage x86_64](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.5/chat-desktop-spike-0.1.1-preview.5-linux-x86_64.AppImage) |
+| Контрольные суммы | [SHA256SUMS.txt — четыре installers и updater metadata/blockmap](https://github.com/do-service/chat-apps/releases/download/v0.1.1-preview.5/SHA256SUMS.txt) |
 
-Сверьте SHA-256 до установки. Windows preview остаётся unsigned, без доверенной подписи; macOS использует ad-hoc signing, **без Developer ID и notarization**. Возможны SmartScreen/Gatekeeper warnings или отказ запуска. Не отключайте защиты ОС ради запуска; зафиксируйте отказ как ограничение. В preview.4 Linux updater допускается только для установленного writable AppImage; его N→N+1 приёмка ещё не проведена. Unsigned Windows остаётся external/manual fallback без trusted publisher; signature verification не отключается. macOS обновляется только внешним DMG нужной архитектуры, без ZIP/updater metadata.
+Сверьте SHA-256 до установки. Windows preview остаётся unsigned, без доверенной подписи; macOS использует ad-hoc signing, **без Developer ID и notarization**. Возможны SmartScreen/Gatekeeper warnings или отказ запуска. Не отключайте защиты ОС ради запуска; зафиксируйте отказ как ограничение. Linux updater допускается только для установленного writable AppImage; его N→N+1 приёмка ещё не проведена. Unsigned Windows остаётся external/manual fallback без trusted publisher; signature verification не отключается. macOS обновляется только внешним DMG нужной архитектуры, без ZIP/updater metadata.
 
-### Новое в preview.4
+### Что сохраняется из preview.4
 
 - Windows: native taskbar overlay `1…99` / `99+`, полный счётчик в accessibility description. Ноль, выход и смена аккаунта очищают значок; восстановление окна применяет последнее значение. Реальный показ зависит от настроек Windows и ещё требует installed-проверки.
 - Linux/KDE: скачанный AppImage работает без установки. Для привязки LauncherEntry предлагается **явно** добавить пользовательский ярлык в меню приложений; «Не сейчас» ничего не регистрирует и запоминается локально. Повтор — через меню/tray «Добавить в меню приложений…». Чужие ярлыки, профиль и настройки панели не меняются. После перемещения AppImage обновление собственного ярлыка требует нового согласия; старые pins могут потребовать ручной перепривязки. Счётчик по-прежнему best effort, не обход DND/badge settings KDE.
@@ -72,6 +72,13 @@ npm start
 На macOS build дополнительно компилирует [native addon](<native/notification-permission.mm>) через [build-native script](<scripts/build-native.mjs>): нужны установленные Command Line Tools/macOS SDK, `clang++` и локальные Node-API headers (`node_api.h`). При нестандартном расположении headers задайте `NODE_API_INCLUDE` на установленный include-каталог. Script не скачивает headers и завершает build ошибкой, если prerequisites отсутствуют. Addon — универсальный `arm64` + `x86_64`, Node-API 8, без новых npm dependencies; в пакете он лежит вне ASAR как `dist/notification-permission.node`. На Windows/Linux этот macOS addon не собирается.
 
 Обычная сборка встраивает default origin из [app-config.json](<app-config.json>) как предложение первого локального host picker; без сохранённого выбора он показывается до создания remote session. Сохранённый выбор имеет приоритет над default. Необязательный `DESKTOP_APP_URL` переопределяет origin при сборке или запуске; runtime override имеет приоритет над сохранённым выбором и отключает picker/меню смены сервера. Разрешён только HTTPS origin без credentials, пути, query и fragment. Пункт меню «Сменить сервер…» сохраняет новый origin и перезапускает приложение. Смена origin создаёт отдельный session-профиль, а не переносит существующий вход. Без валидного origin normal mode завершается ошибкой, а не незаметно переключается в локальную диагностику. Правила — в [src/config.ts](<src/config.ts>) и [scripts/build.mjs](<scripts/build.mjs>).
+
+### Настройки прокси
+
+Шестерёнка на экране выбора сервера и пункт «Настройки прокси…» в меню приложения и трея доступны без подключения. Поддерживаются «По умолчанию» (прежнее поведение), «Без прокси», системный прокси и ручные HTTP, HTTPS и SOCKS5 (адрес и порт, без логина и пароля). Настройка хранится локально и общая для всех серверов. При первом запуске она применяется до подключения; после изменения через меню клиент перезапускается.
+
+- **Только проверка обновлений** — настройка применяется к ручной и автоматической проверке версии, но не к скачиванию установщика и не к соединениям чата.
+- **Весь трафик** — настройка применяется к запросам чата (включая WebSocket и вложения), нативной части входа, проверке обновлений и встроенному скачиванию. С ручным или системным прокси ограничивается прямой UDP WebRTC: звонки и прямая передача файлов могут не работать. Системный режим учитывает исключения ОС. Это не VPN: внешний браузер использует свои настройки, сетевые службы ОС клиент не контролирует.
 
 ### Локальная диагностика
 
@@ -157,7 +164,7 @@ npm run package:linux     # Linux: AppImage x64
 npm run package:dir       # распакованное приложение текущей ОС
 ```
 
-Результат появляется в `release`. Базовое имя: `chat-desktop-spike-0.1.1-preview.4-<os>-<arch>.<ext>` (Linux x64 расширяется packager-ом как `x86_64`). Для публичного распространения эти команды сами по себе недостаточны: нужны отдельные решения о signing, notarization и установленная OS-приёмка.
+Результат появляется в `release`. Базовое имя: `chat-desktop-spike-0.1.1-preview.5-<os>-<arch>.<ext>` (Linux x64 расширяется packager-ом как `x86_64`). Для публичного распространения эти команды сами по себе недостаточны: нужны отдельные решения о signing, notarization и установленная OS-приёмка.
 
 [Desktop CI](<.github/workflows/desktop.yml>) предназначен для тестовых native-сборок на стандартных hosted runners:
 
@@ -178,7 +185,7 @@ Workflow создаёт Actions artifacts `desktop-test-<platform>-<run_id>-<run
 
 Отдельный [manual Android workflow](<.github/workflows/android.yml>) собирает тестовый APK на Linux runner из проверенного frontend/mobile snapshot GitLab, без публикации backend, истории или raw source archive. Инструкции, доступ только из `main`, Secrets, точный artifact allowlist и ограничения debug-подписи — в [Android CI](<ANDROID_CI.md>). Этот job не меняет desktop-сборку и не публикует Release/Google Play. Успех локальных helper-тестов сам по себе не означает, что APK уже собран.
 
-Android signing/release preparation не входит в desktop preview.4 и не является его CI-зависимостью.
+Android signing/release preparation не входит в desktop preview.5 и не является его CI-зависимостью.
 
 ## Приёмка и известные риски
 
@@ -186,4 +193,4 @@ Android signing/release preparation не входит в desktop preview.4 и н
 
 Известная оговорка: отдельные audit от 2026-11-08 и 2026-11-09 сообщили moderate advisory [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) в build-time цепочке `minimatch` через packaging tools; high/critical не зафиксированы. Manifest и lock подтверждают devDependency-цепочку; это не утверждение об exploit в renderer. Подробности — в [ACCEPTANCE.md](<ACCEPTANCE.md>). Исправление/override зависимостей здесь не выполнялись. Audit нужно повторять отдельно; закреплённые версии и успешные тесты не означают «уязвимостей нет».
 
-Документация preview.4 подготовлена 2026-11-16. Исторические результаты `0.1.0` и опубликованных preview.1/preview.2/preview.3 не перенесены в новую версию; новые CI/installers, публикация и installed-приёмка preview.4 пока не подтверждены. Lead заполняет фактические проверки отдельно в [ACCEPTANCE.md](<ACCEPTANCE.md>). Это не протокол production deployment.
+Исторические результаты `0.1.0` и предыдущих preview не перенесены в новую версию; CI-сборки, установщики, публикация и приёмка установленного preview.5 пока не подтверждены. Lead заполняет фактические проверки отдельно в [ACCEPTANCE.md](<ACCEPTANCE.md>). Это не протокол production deployment.

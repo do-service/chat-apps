@@ -39,7 +39,9 @@ test("metadata transport rejects external redirects, loops, non-200, oversized d
 
 test("release API is fixed and an already cancelled request cannot consume metadata", async () => {
   const controller = new AbortController(); controller.abort();
-  await assert.rejects(readPublicUpdateMetadata(RELEASE_API, controller.signal, async (_url, options) => {
-    assert.ok(options.signal?.aborted); throw new Error("cancelled");
-  }));
+  let requested = false;
+  await assert.rejects(readPublicUpdateMetadata(RELEASE_API, controller.signal, async () => {
+    requested = true; return new Response("[]");
+  }), { name: "AbortError" });
+  assert.equal(requested, false);
 });

@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { randomUUID } from "node:crypto";
+import { createElectronUpdateRequest } from "./electron-update-request";
+import { readPublicUpdateMetadata, type PublicUpdateFetch } from "./update-transport";
 import { runInNewContext } from "node:vm";
 import * as filesystem from "node:fs";
 import * as paths from "node:path";
@@ -26,7 +30,31 @@ type RequestGuard = (details: { url: string }, callback: (value: { cancel?: bool
 type HeaderGuard = (details: { url: string; statusCode: number; responseHeaders?: Record<string, string[]> }, callback: (value: { cancel?: boolean }) => void) => void;
 type SendGuard = (details: unknown, callback: (value: { requestHeaders?: Record<string, string> }) => void) => void;
 
-function fixture(os = "win32", packaged = true, nativeFilesystem = false) {
+type ProxyOptions = { metadata?: Electron.ProxyConfig; download?: Electron.ProxyConfig };
+const metadataProxy: Electron.ProxyConfig = { mode: "fixed_servers", proxyRules: "http://proxy.example:8080" };
+const downloadProxy: Electron.ProxyConfig = { mode: "system" };
+const metadataCDN = "https://release-assets.githubusercontent.com/github-production-release-asset/1/a?sig=fake";
+function deferred() {
+  let resolve = () => {}; let reject = (_error: Error) => {};
+  const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+class MetadataRequest extends EventEmitter {
+  aborted = false;
+  private body?: PassThrough;
+  constructor(readonly options: Electron.ClientRequestConstructorOptions, private readonly dispatch: (request: MetadataRequest) => void) { super(); }
+  end() { this.dispatch(this); }
+  abort() { this.aborted = true; this.body?.destroy(); this.emit("abort"); }
+  redirect(location: string) { this.emit("redirect", 302, "GET", new URL(location, this.options.url).href, { location: [location], "set-cookie": ["token=private"] }); }
+  response(statusCode: number, headers: Record<string, string> = {}) {
+    const body = Object.assign(new PassThrough(), { statusCode, headers, rawHeaders: Object.entries(headers).flat() });
+    this.body = body;
+    this.emit("response", body);
+    return body;
+  }
+}
+
+function fixture(os = "win32", packaged = true, nativeFilesystem = false, proxy?: ProxyOptions) {
   let before: RequestGuard | undefined; let headers: HeaderGuard | undefined; let send: SendGuard | undefined;
   const requests: string[] = []; const instances: Updater[] = []; let quit = 0;
   const signatureChecks: string[] = []; let signatureValid = true;
@@ -34,7 +62,13 @@ function fixture(os = "win32", packaged = true, nativeFilesystem = false) {
   let download: (token: CancellationToken, updater: Updater) => Promise<string[]> = async () => ["private-cache.exe"];
   const timers = new Map<object, { callback: () => void; delay: number }>();
   const setTimer = (callback: () => void, delay: number) => { const timer = { unref() {} }; timers.set(timer, { callback, delay }); return timer; };
-  const ses = { webRequest: {
+  const proxyCalls: { scope: string; config: Electron.ProxyConfig }[] = [];
+  const partitions: { name: string; options: unknown }[] = [];
+  const wire: MetadataRequest[] = [];
+  let setup = (_scope: string): Promise<void> => Promise.resolve();
+  const setProxy = (scope: string) => (config: Electron.ProxyConfig) => { proxyCalls.push({ scope, config }); return setup(scope); };
+  const metadataSession = { setProxy: setProxy("metadata") };
+  const ses = { setProxy: setProxy("binary"), closeAllConnections: async () => {}, webRequest: {
     onBeforeRequest: (_filter: unknown, callback: RequestGuard) => { before = callback; },
     onBeforeSendHeaders: (_filter: unknown, callback: SendGuard) => { send = callback; },
     onHeadersReceived: (_filter: unknown, callback: HeaderGuard) => { headers = callback; },
@@ -53,22 +87,33 @@ function fixture(os = "win32", packaged = true, nativeFilesystem = false) {
   const window = Object.assign(new EventEmitter(), { webContents: new EventEmitter() });
   let confirm: (signal: AbortSignal) => Promise<{ response: number }> = async () => ({ response: 1 });
   const prompts: { buttons: string[]; cancelId: number; defaultId: number }[] = [];
+  const metadata = (url: string) => {
+    if (url === release.RELEASE_API) return JSON.stringify([{ tag_name: `v${version}`, draft: false, prerelease: true,
+      assets: [filename, "preview.yml", `chat-desktop-${version}-mac-x64.dmg`].map((name) => ({ name, size: 2048, browser_download_url: root + name })) }]);
+    return `version: ${version}\nfiles:\n  - url: ${filename}\n    sha512: ${Buffer.alloc(64, 42).toString("base64")}\n    size: 2048\n`;
+  };
+  let dispatch = (request: MetadataRequest) => {
+    if (request.options.url === root + "preview.yml") request.redirect(metadataCDN);
+    else request.response(200, { "set-cookie": "token=private" }).end(metadata(request.options.url ?? ""));
+  };
   const modules: Record<string, unknown> = {
     electron: { app: { isPackaged: packaged, getVersion: () => "0.1.0", quit: () => { quit++; } },
+      session: { fromPartition: (name: string, options: unknown) => { partitions.push({ name, options }); return metadataSession; } },
+      net: { request: (options: Electron.ClientRequestConstructorOptions) => { const request = new MetadataRequest(options, dispatch); wire.push(request); return request; } },
       dialog: { showMessageBox: (_window: unknown, options: { signal: AbortSignal; buttons: string[]; cancelId: number; defaultId: number }) => { prompts.push(options); return confirm(options.signal); } } },
     "node:fs": nativeFilesystem ? filesystem : { lstatSync: () => ({ size: 1024 }), readFileSync: () => JSON.stringify(feed) },
-    "node:path": paths,
+    "node:path": paths, "node:crypto": { randomUUID },
+    "./electron-update-request": { createElectronUpdateRequest },
     "electron-updater": { NsisUpdater: Updater, AppImageUpdater: Updater, CancellationToken, Provider: MockProvider },
     "./update-files": updateFiles,
     "./update-signature": { verifyWindowsSignature: async (_publishers: string[], path: string) => { signatureChecks.push(path); return signatureValid ? null : "Rejected signature"; } },
     "electron-updater/out/electronHttpExecutor": { ElectronHttpExecutor: class {} },
     "electron-updater/out/providers/Provider": { parseUpdateInfo },
     "./contract": contract, "./update-release": release,
-    "./update-transport": { readPublicUpdateMetadata: async (url: string) => {
+    "./update-transport": { readPublicUpdateMetadata: async (url: string, signal: AbortSignal, request?: PublicUpdateFetch) => {
+      if (request) return readPublicUpdateMetadata(url, signal, request);
       requests.push(url);
-      if (url === release.RELEASE_API) return JSON.stringify([{ tag_name: `v${version}`, draft: false, prerelease: true,
-        assets: [filename, "preview.yml", `chat-desktop-${version}-mac-x64.dmg`].map((name) => ({ name, size: 2048, browser_download_url: root + name })) }]);
-      return `version: ${version}\nfiles:\n  - url: ${filename}\n    sha512: ${Buffer.alloc(64, 42).toString("base64")}\n    size: 2048\n`;
+      return metadata(url);
     } },
   };
   const module = { exports: {} };
@@ -79,13 +124,15 @@ function fixture(os = "win32", packaged = true, nativeFilesystem = false) {
   const create: unknown = result.createElectronUpdatePort; const policy: unknown = result.desktopUpdateMode;
   const writable: unknown = result.writableAppImage;
   assert.ok(typeof create === "function"); assert.ok(typeof policy === "function"); assert.ok(typeof writable === "function");
-  const value: unknown = create(config, os, { window: () => window }); assert.ok(contract.isRecord(value));
+  const value: unknown = create(config, os, { window: () => window }, proxy); assert.ok(contract.isRecord(value));
   const port: unknown = value.port; assert.ok(contract.isRecord(port));
   // Validate each port boundary rather than casting an untyped VM object.
   function method(name: string): (...args: unknown[]) => unknown {
     const fn: unknown = contract.isRecord(port) ? port[name] : undefined; assert.ok(typeof fn === "function"); return (...args) => fn(...args);
   }
   return { instances, requests, prompts, window, policy, writable, mode: value.mode, call: method, signatureChecks,
+    proxyCalls, partitions, wire, metadataSession,
+    setSetup: (value: typeof setup) => { setup = value; }, setDispatch: (value: typeof dispatch) => { dispatch = value; },
     rejectSignature: () => { signatureValid = false; },
     quit: () => quit, setInstall: (value: typeof install) => { install = value; },
     pendingDownload: () => {
@@ -189,6 +236,97 @@ test("binary CDN loops have an independent redirect budget and inactivity/overal
   }
   const retry = f.pendingDownload(); assert.equal(f.responseAllowed(cdn, 302, { location: [cdn] }), true);
   retry.finish(); await retry.result; assert.equal(f.timerCount(), 0);
+});
+
+test("metadata override uses one lazy non-persistent cookie-free session and keeps binary separate", async () => {
+  const f = fixture("win32", true, false, { metadata: metadataProxy });
+  assert.equal(f.partitions.length, 0); assert.deepEqual(f.proxyCalls, []);
+  await f.call("check")();
+  assert.deepEqual(f.proxyCalls, [{ scope: "metadata", config: metadataProxy }]);
+  assert.equal(f.partitions.length, 1); assert.ok(!f.partitions[0].name.startsWith("persist:"));
+  assert.deepEqual(structuredClone(f.partitions[0].options), { cache: false });
+  assert.deepEqual(f.requests, []);
+  assert.deepEqual(f.wire.map(({ options }) => options.url), [release.RELEASE_API, root + "preview.yml", metadataCDN]);
+  assert.equal(f.wire[1].aborted, true);
+  for (const { options } of f.wire) {
+    assert.equal(options.session, f.metadataSession); assert.equal(options.credentials, "omit");
+    assert.equal(options.redirect, "manual"); assert.equal(options.cache, "no-store");
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(options.headers ?? {})) headers.set(key, value.toString());
+    for (const name of ["cookie", "authorization", "proxy-authorization"]) assert.equal(headers.has(name), false);
+  }
+  const download = f.pendingDownload(); download.finish(); await download.result;
+  await f.call("check")();
+  assert.deepEqual(f.proxyCalls.map(({ scope }) => scope), ["metadata"]);
+  assert.equal(f.partitions.length, 1);
+});
+
+test("metadata routing awaits setup and fails closed without Node fallback", async () => {
+  const f = fixture("darwin", true, false, { metadata: metadataProxy });
+  const gate = deferred(); f.setSetup(() => gate.promise);
+  const checking = f.call("check")();
+  await new Promise<void>((done) => setImmediate(done));
+  assert.equal(f.proxyCalls.length, 1); assert.equal(f.wire.length, 0); assert.deepEqual(f.requests, []);
+  gate.reject(new Error("Proxy setup failed"));
+  await assert.rejects(async () => checking, /Proxy setup failed/);
+  await assert.rejects(async () => f.call("check")(), /Proxy setup failed/);
+  assert.equal(f.proxyCalls.length, 1); assert.equal(f.wire.length, 0); assert.deepEqual(f.requests, []);
+});
+
+test("binary override starts only at download and failed setup never enters the updater", async () => {
+  const f = fixture("win32", true, false, { download: downloadProxy });
+  await f.call("check")();
+  assert.deepEqual(f.proxyCalls, []); assert.deepEqual(f.requests, [release.RELEASE_API, root + "preview.yml"]);
+  const gate = deferred(); f.setSetup(() => gate.promise);
+  const downloading = f.call("download")(() => {});
+  await new Promise<void>((done) => setImmediate(done));
+  assert.deepEqual(f.proxyCalls, [{ scope: "binary", config: downloadProxy }]); assert.deepEqual(f.signatureChecks, []);
+  gate.reject(new Error("Proxy setup failed"));
+  await assert.rejects(async () => downloading, /Proxy setup failed/);
+  assert.deepEqual(f.signatureChecks, []); assert.deepEqual(f.partitions, []); assert.equal(f.timerCount(), 0);
+});
+
+test("Electron metadata redirects stay within the allowlist and shared redirect budget", async () => {
+  for (const [location, count] of [["https://evil.example/a", 1], ["http://api.github.com/repos/do-service/chat-apps/releases?per_page=30", 1], [release.RELEASE_API, 4]] as const) {
+    const f = fixture("darwin", true, false, { metadata: metadataProxy });
+    f.setDispatch((request) => request.redirect(location));
+    await assert.rejects(async () => f.call("check")(), { code: "ERR_INVALID_RELEASE" });
+    assert.equal(f.wire.length, count); assert.ok(f.wire.every(({ aborted }) => aborted));
+  }
+});
+
+test("metadata size and certificate failures terminate the Electron request without fallback", async () => {
+  for (const failure of ["length", "stream", "certificate"]) {
+    const f = fixture("darwin", true, false, { metadata: metadataProxy });
+    const tooLarge = release.MAX_METADATA_BYTES + 1;
+    f.setDispatch((request) => {
+      if (failure === "length") request.response(200, { "Content-Length": String(tooLarge) });
+      else if (failure === "stream") request.response(200).write(Buffer.alloc(tooLarge));
+      else request.emit("error", new Error("net::ERR_CERT_AUTHORITY_INVALID"));
+    });
+    await assert.rejects(async () => f.call("check")(), failure === "certificate" ? /ERR_CERT/ : { code: "ERR_INVALID_RELEASE" });
+    await new Promise<void>((done) => setImmediate(done));
+    assert.equal(f.wire.length, 1); assert.equal(f.wire[0].aborted, true);
+    assert.deepEqual(f.requests, []);
+  }
+});
+
+test("metadata disposal aborts pending setup, headers and body without a subsequent request", async () => {
+  for (const phase of ["setup", "headers", "body"]) {
+    const f = fixture("darwin", true, false, { metadata: metadataProxy });
+    const gate = deferred();
+    if (phase === "setup") f.setSetup(() => gate.promise);
+    f.setDispatch((request) => { if (phase === "body") request.response(200).write("["); });
+    const checking = f.call("check")();
+    await new Promise<void>((done) => setImmediate(done));
+    f.call("dispose")();
+    await assert.rejects(async () => checking, { name: "AbortError" });
+    gate.resolve(); await new Promise<void>((done) => setImmediate(done));
+    assert.equal(f.wire.length, phase === "setup" ? 0 : 1);
+    assert.ok(f.wire.every(({ aborted }) => aborted));
+    await assert.rejects(async () => f.call("check")(), { name: "AbortError" });
+    assert.equal(f.wire.length, phase === "setup" ? 0 : 1);
+  }
 });
 
 test("native foreground confirmation defaults to cancel and aborts on window/navigation loss", async () => {

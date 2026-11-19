@@ -84,6 +84,7 @@ export function createElectronAuthAttempt(
   appURL: string, persistent: AuthSessionPort,
   ephemeral: AuthSessionPort = session.fromPartition(`chat-auth-${randomUUID()}`, { cache: false }),
   commitHooks?: { prepare(): Promise<void>; finish(): void },
+  configureEphemeral?: () => Promise<void>,
 ): AuthAttemptPort {
   const root = validateAppURL(appURL);
   const origin = new URL(root).origin;
@@ -91,7 +92,14 @@ export function createElectronAuthAttempt(
   // A newer login/logout while the user was in the browser must not be overwritten by this attempt.
   const baseline = persistent.cookies.get(filter).catch(() => undefined);
   let disposed = false;
+  let proxyReady: Promise<void> | undefined;
   const perform = async (jar: AuthSessionPort, path: string, method: "GET" | "POST", body: unknown, signal: AbortSignal) => {
+    if (jar === ephemeral && configureEphemeral) {
+      signal.throwIfAborted();
+      await (proxyReady ??= configureEphemeral());
+      signal.throwIfAborted();
+      if (disposed) throw new AuthFailure("session-install-failed");
+    }
     const response = await jar.fetch(`${origin}${path}`, {
       method, ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
       headers: { Origin: origin, "Content-Type": "application/json", Accept: "application/json" },

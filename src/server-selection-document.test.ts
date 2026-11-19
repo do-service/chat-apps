@@ -27,3 +27,15 @@ test("document escapes hostile attributes and allows only its hashed style", () 
     assert.ok(serverSelectionContentSecurityPolicy.includes(directive), directive);
   }
 });
+
+test("proxy form is local, accessible, defaults explicitly and preserves the server control", () => {
+  const html = Reflect.apply(serverSelectionDocument, undefined, ["https://example.com/", false, {
+    current: { mode: "https", scope: "all", host: '"><img src="bad">', port: 443 }, needsReset: true,
+  }]);
+  for (const text of ['id="server-url"', 'aria-label="Настройки прокси"', 'aria-controls="proxy-panel"',
+    'id="proxy-panel"', 'value="default">По умолчанию', 'value="https" selected', 'value="all" selected',
+    'for="proxy-host"', 'for="proxy-port"', 'id="proxy-error"', 'WebRTC', 'браузер',
+    'Не удалось прочитать сохранённые настройки', '&lt;img', 'value="443"']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /<(?:a|script|iframe|img)\b|formaction=/i);
+  assert.doesNotMatch(serverSelectionDocument("https://example.com/", false), /id="proxy-/);
+});

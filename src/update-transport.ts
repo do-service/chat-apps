@@ -1,12 +1,28 @@
 import { allowedUpdateURL, invalidRelease, MAX_METADATA_BYTES, RELEASE_API } from "./update-release";
 
-export type PublicUpdateFetch = (url: string, init: RequestInit) => Promise<Response>;
+export type PublicUpdateRequestOptions = {
+  method: "GET";
+  redirect: "manual";
+  credentials: "omit";
+  cache: "no-store";
+  signal: AbortSignal;
+  headers: Record<string, string>;
+};
+// Both DOM fetch and Node's Web stream adapter expose this reader contract.
+export type PublicUpdateResponse = Pick<Response, "status" | "headers"> & {
+  body: {
+    cancel(): Promise<void>;
+    getReader(): { read(): Promise<{ done: true } | { done: false; value: Uint8Array }>; cancel(): Promise<void> };
+  } | null;
+};
+export type PublicUpdateFetch = (url: string, init: PublicUpdateRequestOptions) => Promise<PublicUpdateResponse>;
 export async function readPublicUpdateMetadata(
   initial: string, signal: AbortSignal, request: PublicUpdateFetch = fetch,
 ): Promise<string> {
   let url = initial;
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
   for (let redirect = 0; redirect <= 3; redirect++) {
+    bounded.throwIfAborted();
     if (url !== RELEASE_API && !allowedUpdateURL(url)) throw invalidRelease();
     const response = await request(url, {
       method: "GET", redirect: "manual", credentials: "omit", cache: "no-store", signal: bounded,

@@ -2,6 +2,7 @@ import {
   app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, protocol, session, shell, systemPreferences, Tray,
   type IpcMainInvokeEvent, type MenuItemConstructorOptions, type Session,
 } from "electron";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -9,8 +10,9 @@ import {
   type DesktopAuthState, type DesktopCapabilities, type DesktopEvent, type Platform, type WindowState,
 } from "./contract";
 import { resolveConfiguration, type RuntimeConfiguration } from "./config";
-import { selectServer } from "./server-selection";
+import { configureProxy, selectServer } from "./server-selection";
 import { readServerSelection, writeServerSelection } from "./server-store";
+import { defaultProxySettings, proxyRoutes, readProxySettings, writeProxySettings } from "./proxy-settings";
 import { createElectronNotificationPort } from "./electron-notifications";
 import { coordinateNotificationPermissionController, createNotificationPermissionController, type NotificationPermissionController } from "./notification-permission";
 import { FileMetadataStore } from "./notification-store";
@@ -64,6 +66,7 @@ let pendingFocus = false;
 let restoreMissingWindow: (() => void) | null = null;
 let externalPrompt: AbortController | null = null;
 let serverPrompt: AbortController | null = null;
+let proxyPrompt: AbortController | null = null;
 let reloadPrompt: Promise<void> | null = null;
 let reloadClient: (() => Promise<void>) | null = null;
 let integrateLinuxDesktop: ((manual?: boolean) => Promise<void>) | null = null;
@@ -72,8 +75,38 @@ function serverSelectionPath(): string {
   return join(app.getPath("userData"), "server-selection.json");
 }
 
+function proxySettingsPath(): string {
+  return join(app.getPath("userData"), "proxy-settings.json");
+}
+
+async function changeProxy(): Promise<void> {
+  if (quitting || proxyPrompt || serverPrompt) return;
+  const controller = new AbortController();
+  proxyPrompt = controller;
+  try {
+    focusWindow();
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    let current = defaultProxySettings;
+    let needsReset = false;
+    try { current = readProxySettings(proxySettingsPath()); }
+    catch { needsReset = true; }
+    const saved = await configureProxy({ parent, signal: controller.signal, current, needsReset,
+      save: (value) => { writeProxySettings(proxySettingsPath(), value); } });
+    if (!saved || quitting || controller.signal.aborted) return;
+    try { app.relaunch(); }
+    catch { console.error("Desktop proxy settings saved; automatic restart unavailable"); }
+    finally {
+      // A saved proxy must never leave this process running on the previous route.
+      app.quit();
+    }
+  } catch {
+    diagnostic = "Не удалось открыть настройки прокси или перезапустить приложение";
+    if (!quitting) dialog.showErrorBox("Настройки прокси", diagnostic);
+  } finally { if (proxyPrompt === controller) proxyPrompt = null; }
+}
+
 async function changeServer(config: RuntimeConfiguration): Promise<void> {
-  if (quitting || serverPrompt || config.spike || process.env.DESKTOP_APP_URL !== undefined) return;
+  if (quitting || proxyPrompt || serverPrompt || config.spike || process.env.DESKTOP_APP_URL !== undefined) return;
   focusWindow();
   const parent = mainWindow;
   if (!parent || parent.isDestroyed()) return;
@@ -375,7 +408,7 @@ function installSessionPolicy(ses: Session, config: RuntimeConfiguration): void 
   ses.protocol.handle("chat-desktop-error", (request) => {
     if (request.url !== ERROR_URL || request.method !== "GET") return new Response(null, { status: 404 });
     if (config.spike) console.info("Desktop recovery page: served");
-    return new Response("<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\"><title>Chat Desktop Spike</title><h1>Chat Desktop Spike: страница недоступна</h1><p>Страница закрыта или недоступна. Получение событий этой страницей приостановлено. Проверьте сеть и настройку HTTPS origin, затем используйте меню «Перезагрузить клиент…» или «Диагностика».</p><p>Вход выполняется только в системном браузере с кодом и явным подтверждением. Переходы к IdP внутри приложения запрещены.</p></html>", {
+    return new Response("<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\"><title>Chat Desktop Spike</title><h1>Chat Desktop Spike: страница недоступна</h1><p>Страница закрыта или недоступна. Получение событий этой страницей приостановлено. Проверьте сеть и HTTPS-адрес сервера. В меню приложения доступны «Настройки прокси…», «Перезагрузить клиент…» и диагностика.</p><p>Вход выполняется только в системном браузере с кодом и явным подтверждением. Переходы к IdP внутри приложения запрещены.</p></html>", {
       headers: { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'" },
     });
   });
@@ -592,6 +625,7 @@ function installMenus(config: RuntimeConfiguration, service: NotificationService
       click: () => { void reload().catch(() => { diagnostic = "Не удалось перезагрузить клиент; повторите действие через меню приложения"; }); } },
     { label: "Сменить сервер…", enabled: !config.spike && process.env.DESKTOP_APP_URL === undefined,
       click: () => { void changeServer(config); } },
+    ...(!config.spike ? [{ label: "Настройки прокси…", click: () => { void changeProxy(); } }] : []),
     ...(integrateLinuxDesktop ? [{ label: "Добавить в меню приложений…", click: () => { focusWindow(); void integrateLinuxDesktop?.(true); } }] : []),
     { label: "Диагностика фокуса и ограничений", click: () => { void diagnostics().catch(() => { diagnostic = "Диалог диагностики недоступен"; }); } },
     { label: "Тестовое уведомление (--spike)", enabled: config.spike, click: menuOperation(() => {
@@ -629,7 +663,7 @@ function installMenus(config: RuntimeConfiguration, service: NotificationService
 // Keep the tray/service alive even when renderer window.close() bypasses BrowserWindow's close event.
 // Explicit Quit still proceeds through before-quit and will-quit without relying on window-all-closed.
 app.on("window-all-closed", () => {});
-app.on("before-quit", () => { quitting = true; serverPrompt?.abort(); if (updateTimer) clearInterval(updateTimer); nativeUpdates?.dispose(); externalPrompt?.abort(); compatibilityDialog?.abort(); desktopAuth?.dispose(); notifications?.dispose(); });
+app.on("before-quit", () => { quitting = true; serverPrompt?.abort(); proxyPrompt?.abort(); if (updateTimer) clearInterval(updateTimer); nativeUpdates?.dispose(); externalPrompt?.abort(); compatibilityDialog?.abort(); desktopAuth?.dispose(); notifications?.dispose(); });
 app.on("will-quit", () => { tray?.destroy(); });
 
 if (!app.requestSingleInstanceLock()) {
@@ -651,6 +685,12 @@ async function start(): Promise<void> {
   setStartupStage("waiting-app-ready");
   await app.whenReady();
   setStartupStage("app-ready");
+  let proxySettings = defaultProxySettings;
+  let proxyNeedsReset = false;
+  if (!config.spike) {
+    try { proxySettings = readProxySettings(proxySettingsPath()); }
+    catch { proxyNeedsReset = true; }
+  }
   if (!config.spike && process.env.DESKTOP_APP_URL === undefined) {
     setStartupStage("selecting-server");
     let selected = readServerSelection(serverSelectionPath());
@@ -658,7 +698,13 @@ async function start(): Promise<void> {
       const controller = new AbortController();
       serverPrompt = controller;
       try {
-        selected = await selectServer({ initialURL: config.appURL, signal: controller.signal, switching: false });
+        selected = await selectServer({ initialURL: config.appURL, signal: controller.signal, switching: false, proxy: {
+          current: proxySettings, needsReset: proxyNeedsReset,
+          save(value) {
+            proxySettings = writeProxySettings(proxySettingsPath(), value);
+            proxyNeedsReset = false;
+          },
+        } });
         if (quitting || controller.signal.aborted) return;
         if (!selected) { app.quit(); return; }
         writeServerSelection(serverSelectionPath(), selected);
@@ -671,6 +717,13 @@ async function start(): Promise<void> {
   const os = platform();
   setStartupStage("creating-session");
   const ses = session.fromPartition(config.partition);
+  const routes = proxyRoutes(proxySettings);
+  let proxyUnavailable = proxyNeedsReset;
+  if (routes.chat && !proxyUnavailable) {
+    try { await ses.setProxy(routes.chat); }
+    catch { proxyUnavailable = true; }
+  }
+  if (quitting) return;
   setStartupStage("installing-session-policy");
   installSessionPolicy(ses, config);
   const cookieBarrier = config.spike ? null : installAuthCookieBarrier(ses, () =>
@@ -697,7 +750,8 @@ async function start(): Promise<void> {
   // Linux LauncherEntry is best effort: a successful API call does not prove a dock received it.
   const badge = os === "darwin" || os === "linux" || os === "win32";
   setStartupStage("registering-ipc");
-  const updatePort = createElectronUpdatePort(config, os, { window: () => mainWindow });
+  const updatePort = createElectronUpdatePort(proxyUnavailable ? { ...config, updateDistribution: null } : config,
+    os, { window: () => mainWindow }, { metadata: routes.metadata, download: routes.download });
   const updates = new UpdateService({ platform: os, currentVersion: app.getVersion(), mode: updatePort.mode, port: updatePort.port,
     openRelease: (url) => shell.openExternal(url), prepareQuit: () => {
       const previous = quitting; quitting = true; externalPrompt?.abort(); compatibilityDialog?.abort();
@@ -753,6 +807,7 @@ async function start(): Promise<void> {
         webviewTag: false, navigateOnDragDrop: false,
       },
     });
+    if (routes.restrictWebRTC) window.webContents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
     mainWindow = window;
     if (os === "win32") {
       const replayBadge = () => { if (mainWindow === window && !window.isDestroyed()) applyBadge(latestBadgeCount); };
@@ -804,6 +859,11 @@ async function start(): Promise<void> {
   createWindow(true);
   const loadTarget = () => {
     const window = mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed() ? mainWindow : createWindow(true);
+    if (proxyUnavailable) {
+      diagnostic = "Не удалось прочитать или применить настройки прокси. Подключение остановлено. Откройте «Настройки прокси…» в меню приложения.";
+      void showErrorPage(window);
+      return;
+    }
     diagnostic = config.spike ? "Локальный сценарий D1; реальные сообщения не подключены" : "HTTPS оболочка; системный вход поддержан, IdP/deployment не проверены";
     void window.loadURL(config.appURL).catch((error: unknown) => {
       if (isAbortedNavigation(error)) return;
@@ -814,12 +874,14 @@ async function start(): Promise<void> {
       return showErrorPage(window);
     });
   };
-  if (!config.spike) {
+  if (!config.spike && !proxyUnavailable) {
     desktopAuth = new DesktopAuthService({
       appURL: config.appURL, platform: os, enabled: true,
       createAttempt: () => {
         let releaseBarrier: (() => void) | undefined;
-        return createElectronAuthAttempt(config.appURL, ses, undefined, {
+        const ephemeral = routes.chat ? session.fromPartition(`chat-auth-${randomUUID()}`, { cache: false }) : undefined;
+        const chatProxy = routes.chat;
+        return createElectronAuthAttempt(config.appURL, ses, ephemeral, {
           async prepare() {
             if (!cookieBarrier) throw new AuthFailure("session-install-failed");
             releaseBarrier = cookieBarrier.begin();
@@ -849,7 +911,7 @@ async function start(): Promise<void> {
             });
           },
           finish() { releaseBarrier?.(); releaseBarrier = undefined; },
-        });
+        }, ephemeral && chatProxy ? () => ephemeral.setProxy(chatProxy) : undefined);
       },
       openBrowser: (url) => shell.openExternal(url),
       emit: (state) => handleAuthState(config, state),

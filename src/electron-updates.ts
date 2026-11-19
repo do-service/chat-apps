@@ -1,4 +1,5 @@
-import { app, dialog } from "electron";
+import { app, dialog, net, session } from "electron";
+import { randomUUID } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AppImageUpdater, CancellationToken, NsisUpdater, Provider, type UpdateInfo, type ResolvedUpdateFileInfo } from "electron-updater";
@@ -10,6 +11,7 @@ import type { RuntimeConfiguration } from "./config";
 import type { UpdateMode } from "./update-contract";
 import { allowedUpdateURL, invalidRelease, MAX_METADATA_BYTES, selectRelease, validateUpdateInfo, RELEASE_API, type DesktopRelease } from "./update-release";
 import { readPublicUpdateMetadata } from "./update-transport";
+import { createElectronUpdateRequest } from "./electron-update-request";
 import type { UpdateCandidate, UpdateContext, UpdatePort } from "./updates";
 import type { InstallOptions } from "electron-updater/out/BaseUpdater";
 import { installAppImage, updateCacheFailure, verifyCachedInstaller, writableAppImage, type InstallerIntegrity } from "./update-files";
@@ -71,7 +73,10 @@ class PreviewAppImageUpdater extends AppImageUpdater {
   resetInstallAttempt(): void { this.quitAndInstallCalled = false; }
 }
 
-export function createElectronUpdatePort(config: RuntimeConfiguration, os: Platform, owner: Owner): { mode: UpdateMode; port: UpdatePort } {
+export function createElectronUpdatePort(
+  config: RuntimeConfiguration, os: Platform, owner: Owner,
+  proxy?: { metadata?: Electron.ProxyConfig; download?: Electron.ProxyConfig },
+): { mode: UpdateMode; port: UpdatePort } {
   const feedConfig = diskFeed();
   const mode = desktopUpdateMode(config, os, app.isPackaged, feedConfig, writableAppImage(process.env.APPIMAGE));
   const names: unknown = isRecord(feedConfig) ? feedConfig.publisherName : null;
@@ -87,6 +92,15 @@ export function createElectronUpdatePort(config: RuntimeConfiguration, os: Platf
   let binaryRedirects = 0;
   const load = () => { if (!loaded) throw invalidRelease(); return loaded; };
   const updater = mode !== "install" ? null : os === "win32" ? new PreviewNsisUpdater(load) : new PreviewAppImageUpdater(load);
+  const metadataProxy = proxy?.metadata;
+  let metadataSetup: Promise<Electron.Session> | undefined;
+  const metadataRequest = metadataProxy && createElectronUpdateRequest(() => metadataSetup ??= (async () => {
+    const ses = session.fromPartition(`chat-update-metadata-${randomUUID()}`, { cache: false });
+    await ses.setProxy(metadataProxy);
+    return ses;
+  })(), net.request);
+  const downloadProxy = proxy?.download;
+  let downloadSetup: Promise<void> | undefined;
   if (updater) {
     updater.logger = null;
     updater.autoDownload = false;
@@ -125,11 +139,11 @@ export function createElectronUpdatePort(config: RuntimeConfiguration, os: Platf
   const port: UpdatePort = {
     async check(): Promise<UpdateCandidate | null> {
       loaded = null; selected = null;
-      const releases: unknown = JSON.parse(await readPublicUpdateMetadata(RELEASE_API, controller.signal));
+      const releases: unknown = JSON.parse(await readPublicUpdateMetadata(RELEASE_API, controller.signal, metadataRequest));
       const candidate = selectRelease(releases, os, process.arch, app.getVersion(), mode === "install");
       if (!candidate) return null;
       if (updater && candidate.metadataURL) {
-        const raw = await readPublicUpdateMetadata(candidate.metadataURL, controller.signal);
+        const raw = await readPublicUpdateMetadata(candidate.metadataURL, controller.signal, metadataRequest);
         let parsed: unknown;
         try { parsed = parseUpdateInfo(raw, "preview", new URL(candidate.metadataURL)); } catch { throw invalidRelease(); }
         const info = validateUpdateInfo(parsed, candidate);
@@ -154,6 +168,17 @@ export function createElectronUpdatePort(config: RuntimeConfiguration, os: Platf
         clearTimeout(idle); idle = setTimeout(expire, UPDATE_DOWNLOAD_IDLE_TIMEOUT); idle.unref(); onProgress(percent);
       };
       const transfer = async () => {
+        if (downloadProxy) {
+          await token.createPromise<void>((resolve, reject) => {
+            downloadSetup ??= (async () => {
+              const ses = updater.netSession;
+              await ses.setProxy(downloadProxy);
+              await ses.closeAllConnections();
+            })();
+            void downloadSetup.then(resolve, reject);
+          });
+          if (token.cancelled || controller.signal.aborted) throw invalidRelease();
+        }
         const paths = await updater.downloadUpdate(token);
         // Upstream may reuse a hash-valid cached download without running its signature task again.
         if (os === "win32" && (!paths[0] || await verifyWindowsSignature(publishers, paths[0]) !== null)) {

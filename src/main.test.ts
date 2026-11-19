@@ -13,6 +13,7 @@ import * as security from "./security";
 import * as updates from "./updates";
 import * as updateIPC from "./update-ipc";
 import * as taskbarBadge from "./taskbar-badge";
+import * as proxySettings from "./proxy-settings";
 import type { UpdatePort, UpdateContext } from "./updates";
 import type { MenuItemConstructorOptions } from "electron";
 import type { DesktopEvent, WindowState } from "./contract";
@@ -20,6 +21,55 @@ import type { LinuxDesktopIntegrationPort } from "./linux-desktop-integration";
 import type { NativeCallbacks, NotificationMetadata, NotificationNativePort } from "./notifications";
 
 const origin = "https://chat.example";
+
+test("first-run proxy save applies to the initial chat load and both updater routes", async () => {
+  const proxy = { mode: "fixed_servers", proxyRules: "socks5://localhost:1080", proxyBypassRules: "<-loopback>" };
+  const f = await fixture(false, { spike: false, savedServer: null, serverChoice: `${origin}/`,
+    firstRunProxy: { mode: "socks5", scope: "all", host: "localhost", port: 1080 } });
+  try {
+    assert.ok(f.serverPrompts[0]?.proxy);
+    assert.deepEqual(f.routeCalls, [proxy, "disable_non_proxied_udp", `${origin}/`]);
+    assert.deepEqual(f.updaterRoutes, [{ metadata: proxy, download: proxy }]);
+  } finally { f.stop(); }
+});
+
+test("check-only leaves chat untouched; the offline tray action saves and relaunches", async () => {
+  const settings = { mode: "system", scope: "check" } as const;
+  const f = await fixture(false, { spike: false, proxy: settings });
+  try {
+    assert.deepEqual(f.routeCalls, [`${origin}/`]);
+    assert.deepEqual(f.updaterRoutes, [{ metadata: { mode: "system" }, download: undefined }]);
+    const action = f.trayMenus[0]?.find((item) => item.label === "Настройки прокси…");
+    assert.ok(action?.click);
+    Reflect.apply(action.click, undefined, []);
+    await new Promise<void>((done) => setImmediate(done));
+    assert.deepEqual(f.proxyPrompts.map(({ current }) => current), [settings]);
+    assert.deepEqual(f.serverCalls.slice(-2), ["relaunch", "quit"]);
+  } finally { f.stop(); }
+});
+
+test("a failed automatic restart after saving proxy still closes the old route", async () => {
+  const f = await fixture(false, { spike: false, relaunchFails: true });
+  try {
+    const action = f.trayMenus[0]?.find((item) => item.label === "Настройки прокси…");
+    assert.ok(action?.click);
+    Reflect.apply(action.click, undefined, []);
+    await new Promise<void>((done) => setImmediate(done));
+    assert.deepEqual(f.serverCalls.slice(-2), ["relaunch", "quit"]);
+    assert.deepEqual(f.messages, []);
+  } finally { f.stop(); }
+});
+
+test("damaged settings or a failed proxy setup cannot load chat via default networking", async () => {
+  for (const options of [{ proxyReadFails: true }, { proxy: { mode: "system", scope: "all" } as const, proxySetupFails: true }]) {
+    const f = await fixture(false, { spike: false, ...options });
+    try {
+      assert.deepEqual(f.loads, [security.ERROR_URL]);
+      assert.equal(f.updateCalls.includes("check"), false);
+      assert.ok(f.trayMenus[0]?.some((item) => item.label === "Настройки прокси…"));
+    } finally { f.stop(); }
+  }
+});
 const compiled = spawnSync(process.execPath, ["--input-type=module", "-e",
   'import { transformSync } from "esbuild"; import { readFileSync } from "node:fs"; process.stdout.write(transformSync(readFileSync("src/main.ts", "utf8"), { loader: "ts", format: "cjs", target: "node24" }).code);',
 ], { encoding: "utf8" });
@@ -32,14 +82,18 @@ type PermissionDetails = Record<string, unknown>;
 type RequestHandler = (contents: unknown, permission: string, callback: (allowed: boolean) => void, details: unknown) => void;
 type CheckHandler = (contents: unknown, permission: string, requestingOrigin: string, details: unknown) => boolean;
 
-async function fixture(cold = false, options: { savedServer?: string | null; serverChoice?: string | null; serverWriteFails?: boolean; serverReadFails?: boolean; relaunchFails?: boolean; environmentURL?: string; updates?: boolean; spike?: boolean; platform?: string; status?: MediaStatus; cameraStatus?: MediaStatus; notificationPermission?: string; realNotificationPermission?: boolean; badgeResult?: boolean; appImage?: string; captureBadgeTimers?: boolean } = {}) {
+async function fixture(cold = false, options: { proxy?: proxySettings.ProxySettings; proxyReadFails?: boolean; proxySetupFails?: boolean; firstRunProxy?: proxySettings.ProxySettings; savedServer?: string | null; serverChoice?: string | null; serverWriteFails?: boolean; serverReadFails?: boolean; relaunchFails?: boolean; environmentURL?: string; updates?: boolean; spike?: boolean; platform?: string; status?: MediaStatus; cameraStatus?: MediaStatus; notificationPermission?: string; realNotificationPermission?: boolean; badgeResult?: boolean; appImage?: string; captureBadgeTimers?: boolean } = {}) {
   const integrationPorts: LinuxDesktopIntegrationPort[] = [];
   const integrationCalls: boolean[] = [];
   const badgeRefreshes: (() => void)[] = [];
   const integrationPrompts: Electron.MessageBoxOptions[] = [];
   let integrationAnswer: () => Promise<number> = async () => 1;
   const serverCalls: string[] = [];
-  const serverPrompts: { initialURL: string; switching: boolean; signal: AbortSignal }[] = [];
+  const serverPrompts: { initialURL: string; switching: boolean; signal: AbortSignal; proxy?: { save(value: unknown): void } }[] = [];
+  const routeCalls: unknown[] = [];
+  const updaterRoutes: unknown[] = [];
+  const proxyPrompts: { current: proxySettings.ProxySettings; save(value: unknown): void }[] = [];
+  let savedProxy = options.proxy;
   let serverChoice: () => Promise<string | null> = async () => options.serverChoice ?? null;
   const events: DesktopEvent[] = [];
   const badgeCalls: number[] = [];
@@ -116,6 +170,7 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
     mainFrame: frame, isDestroyed: () => contentsDestroyed,
     isLoadingMainFrame: () => loading,
     reloadIgnoringCache: () => { reloadCalls.push(frame.url); },
+    setWebRTCIPHandlingPolicy(policy: string) { routeCalls.push(policy); },
     setWindowOpenHandler(handler: typeof windowOpen) { windowOpen = handler; }, getURL: () => contentsURL ?? frame.url,
   });
   let rootWindow: Window | undefined;
@@ -138,9 +193,13 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
     focus() { state = { ...state, focused: true }; this.emit("focus"); }
     hide() { state = { ...state, visible: false }; }
     minimize() { state = { ...state, minimized: true }; }
-    async loadURL(url: string) { loads.push(url); }
+    async loadURL(url: string) { loads.push(url); routeCalls.push(url); }
   }
   const ses = Object.assign(new EventEmitter(), {
+    async setProxy(value: Electron.ProxyConfig) {
+      routeCalls.push(structuredClone(value));
+      if (options.proxySetupFails) throw new Error("private proxy");
+    },
     setPermissionRequestHandler(handler: RequestHandler) { requestHandler = handler; },
     setPermissionCheckHandler(handler: CheckHandler) { checkHandler = handler; },
     setDevicePermissionHandler(handler: () => boolean) { deviceHandler = handler; },
@@ -217,7 +276,15 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
         },
       }, Tray,
     },
+    "node:crypto": { randomUUID: () => "test-auth" },
     "node:fs": { existsSync: () => false }, "node:path": { join: (...parts: string[]) => parts.join("/") },
+    "./proxy-settings": { ...proxySettings,
+      readProxySettings: () => {
+        if (options.proxyReadFails && !savedProxy) throw new Error("private proxy file");
+        return savedProxy ?? proxySettings.defaultProxySettings;
+      },
+      writeProxySettings: (_path: string, value: unknown) => { savedProxy = proxySettings.parseProxySettings(value); return savedProxy; },
+    },
     "./server-store": {
       readServerSelection: () => {
         serverCalls.push("read");
@@ -229,16 +296,28 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
         if (options.serverWriteFails) throw new Error("private-path");
       },
     },
-    "./server-selection": { selectServer: (request: (typeof serverPrompts)[number]) => {
-      serverPrompts.push(request); return serverChoice();
-    } },
+    "./server-selection": {
+      selectServer: (request: (typeof serverPrompts)[number]) => {
+        serverPrompts.push(request);
+        if (options.firstRunProxy) request.proxy?.save(options.firstRunProxy);
+        return serverChoice();
+      },
+      configureProxy: async (request: (typeof proxyPrompts)[number]) => {
+        proxyPrompts.push(request);
+        request.save({ mode: "system", scope: "all" });
+        return true;
+      },
+    },
     "./linux-desktop-integration": { createLinuxDesktopIntegration: (port: LinuxDesktopIntegrationPort) => {
       integrationPorts.push(port);
       return async (manual = false) => { integrationCalls.push(manual); };
     } },
     "./contract": contract, "./security": security, "./lifecycle": lifecycle, "./media-permissions": mediaPermissions, "./notifications": notifications,
     "./updates": updates, "./update-ipc": updateIPC, "./taskbar-badge": taskbarBadge,
-    "./electron-updates": { createElectronUpdatePort: () => ({ mode: options.updates ? "install" : "unconfigured", port: updatePort }) },
+    "./electron-updates": { createElectronUpdatePort: (_config: unknown, _os: unknown, _owner: unknown, routes: unknown) => {
+      updaterRoutes.push(structuredClone(routes));
+      return { mode: options.updates ? "install" : "unconfigured", port: updatePort };
+    } },
     "./config": { resolveConfiguration: (_args: string[], url: string | undefined) => options.spike === false
       ? resolveConfiguration([], url, { appUrl: origin })
       : { spike: true, trustedOrigin: origin, appURL: `${origin}/`, partition: "test", profileKey: "test" } },
@@ -287,7 +366,7 @@ async function fixture(cold = false, options: { savedServer?: string | null; ser
     contents, frame, osCalls, notificationCalls, applicationMenus, trayMenus, createdNotifications,
     badgeCalls, overlayCalls, bitmapCalls, startupCalls, windowOptions, images, trayImages, messages, externalPrompts,
     setOverlayFails: (value: boolean) => { overlayFails = value; },
-    updateCalls, serverCalls, serverPrompts, reloadPrompts, reloadCalls, loads,
+    updateCalls, serverCalls, serverPrompts, reloadPrompts, reloadCalls, loads, routeCalls, updaterRoutes, proxyPrompts,
     integrationPorts, integrationCalls, integrationPrompts, badgeRefreshes,
     setIntegrationAnswer: (value: typeof integrationAnswer) => { integrationAnswer = value; },
     setReloadAnswer: (answer: typeof reloadAnswer) => { reloadAnswer = answer; },

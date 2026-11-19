@@ -90,6 +90,28 @@ test("native requests use exact origin, credentials include, JSON proof body and
   assert.equal(app.calls.length, 0);
 });
 
+test("native sign-in waits for the temporary session proxy and never retries without it", async () => {
+  const persistent = new FakeSession();
+  const ephemeral = new FakeSession();
+  const signal = new AbortController().signal;
+  let finishSetup = () => {};
+  const setup = new Promise<void>((resolve) => { finishSetup = resolve; });
+  let setups = 0;
+  const port = createElectronAuthAttempt(root, persistent, ephemeral, undefined, () => { setups++; return setup; });
+  const pending = port.post("/auth/desktop/exchange", {}, signal);
+  assert.equal(ephemeral.calls.length, 0);
+  finishSetup();
+  await pending;
+  await port.post("/auth/desktop/ack", {}, signal);
+  assert.equal(setups, 1);
+  assert.equal(ephemeral.calls.length, 2);
+  const unavailable = new FakeSession();
+  const closed = createElectronAuthAttempt(root, persistent, unavailable, undefined, async () => { throw new Error("Proxy setup failed"); });
+  await assert.rejects(closed.post("/auth/desktop/exchange", {}, signal), /Proxy setup failed/);
+  assert.equal(unavailable.calls.length, 0);
+  assert.equal(persistent.calls.length, 0);
+});
+
 test("ACK HTTP Retry-After must be bounded integer seconds when present", async () => {
   for (const retryAfter of ["0", "31", "invalid", "2000", "2.5"]) {
     const app = new FakeSession(); const ephemeral = new FakeSession();
